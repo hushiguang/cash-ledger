@@ -41,6 +41,10 @@ function longestCommon(a, b) {
   return best;
 }
 
+// 同一个账户里的两笔要报为重复，至少需要这个分数：
+// 同一时刻(+30) + 商户名一致(+22) + 基线 40 = 92，只有「同额同时刻但商户名对不上」的 70 分会被挡掉
+const SAME_ACCOUNT_MIN_SCORE = 75;
+
 // 备注里记的商户单号（跨平台可能是同一个，能互证是同一笔消费）
 function merchantOrderOf(text) {
   const m = String(text || '').match(/(?:商户订单号|商家订单号|商户单号单号|商户单号)[：:]\s*([A-Za-z0-9_-]{8,})/);
@@ -190,6 +194,44 @@ export function findDuplicatePairs(userId, options = {}) {
     candidates.push(row);
   }
 
+  // 微信/支付宝绑着银行卡消费时，钱包账单的「支付方式」会被归一成那张银行卡，
+  // 于是和银行流水落在同一个账户上 —— 上面的「分属不同账户」条件正好把它们漏掉。
+  // 这里单独找「同账户 + 同一时刻 + 同额」，交给下面按更严的分数门槛判定。
+  const sameArgs = [userId, type, minCents];
+  let sameSql = `
+    SELECT t1.id AS a_id, t2.id AS b_id, 1 AS same_account
+    FROM transactions t1
+    JOIN transactions t2
+      ON t2.user_id = t1.user_id
+      AND t2.type = t1.type
+      AND t2.amount_cents = t1.amount_cents
+      AND t2.occurred_at = t1.occurred_at
+      AND t2.id > t1.id
+    JOIN accounts a1 ON a1.id = t1.account_id
+    JOIN accounts a2 ON a2.id = t2.account_id
+    WHERE t1.user_id = ? AND t1.type = ?
+      AND t1.amount_cents >= ?
+      AND COALESCE(a1.merged_into, a1.id) = COALESCE(a2.merged_into, a2.id)
+  `;
+  if (options.bookId) {
+    sameSql += ' AND t1.book_id = ? AND t2.book_id = ?';
+    sameArgs.push(Number(options.bookId), Number(options.bookId));
+  }
+  if (options.from) {
+    sameSql += ' AND t1.occurred_at >= ?';
+    sameArgs.push(String(options.from).slice(0, 10));
+  }
+  if (options.to) {
+    sameSql += " AND t1.occurred_at < date(?, '+1 day')";
+    sameArgs.push(String(options.to).slice(0, 10));
+  }
+  for (const row of db.prepare(sameSql).all(...sameArgs)) {
+    const key = `${row.a_id}-${row.b_id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidates.push(row);
+  }
+
   if (!candidates.length) return [];
   const ids = [...new Set(candidates.flatMap((row) => [row.a_id, row.b_id]))];
   const marks = ids.map(() => '?').join(',');
@@ -208,6 +250,9 @@ export function findDuplicatePairs(userId, options = {}) {
     const key = pairKey(c.a_id, c.b_id);
     if (ignored.has(key)) continue;
     const { score, reasons } = scorePair(a, b);
+    // 同一个账户里的两笔，要有足够硬的证据才报：比如同一时刻 + 商户名一致 + 单号相同。
+    // 否则「连着买两杯一样的咖啡」会被误判成重复。
+    if (c.same_account && score < SAME_ACCOUNT_MIN_SCORE) continue;
     if (score < minScore) continue;
     pairs.push({
       key,
