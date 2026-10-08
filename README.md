@@ -52,16 +52,15 @@ cd web && npm install && npm run dev
 ```bash
 git clone <你的仓库地址> qingji && cd qingji
 
-# 首次启动：指定配置和数据目录，并把图床配置写进去
-ENV_FILE=/vol1/1000/docker/cash/.env \
-DATA_PATH=/vol1/1000/docker/cash/data \
-IMAGE_HOST_URL=https://image.example.com/api/index.php \
-IMAGE_HOST_TOKEN=你的token \
-./scripts/deploy.sh
+# 1. 填一次配置（deploy.conf 不进 git）
+cp deploy.conf.example deploy.conf
+nano deploy.conf
 
-# 以后更新（配置已存在，不用再带变量）
-ENV_FILE=/vol1/1000/docker/cash/.env ./scripts/deploy.sh
+# 2. 启动；以后更新也是这一条
+./scripts/deploy.sh
 ```
+
+`deploy.conf` 里填写配置和数据目录、端口、图床等，脚本会写进 `ENV_FILE` 指定的 `.env`。想临时覆盖：`PORT=8080 ./scripts/deploy.sh`。
 
 脚本会：生成/更新配置 → `git pull` → 建数据目录 → `docker compose --env-file <配置> up -d --build` → 打印访问地址。
 
@@ -152,4 +151,5 @@ web/             前端（React + Vite）
   src/styles.css    样式
 scripts/export-db.mjs  本地库 → 数据目录快照
 scripts/deploy.sh      从 git 拉取并启动/更新（写入 .env 配置）
+deploy.conf.example    启动配置模板，复制成 deploy.conf 后填自己的值
 ```

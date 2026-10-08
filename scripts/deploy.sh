@@ -9,8 +9,9 @@
 #   IMAGE_HOST_TOKEN=你的token \
 #   ./scripts/deploy.sh
 #
-# 之后更新（配置已存在，不用再带变量）：
-#   ENV_FILE=/vol1/1000/docker/cash/.env ./scripts/deploy.sh
+# 更省事的做法：cp deploy.conf.example deploy.conf 填一次，之后只跑：
+#   ./scripts/deploy.sh
+# 配置存在 deploy.conf 里（不进 git），命令行传同名变量可以临时覆盖。
 #
 # 可选：
 #   SEED_DB=/path/to/ledger.db   首次把已有数据库放进数据目录
@@ -21,6 +22,27 @@
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+# 0. 读 deploy.conf（本地配置，不进 git）。命令行传进来的同名变量优先。
+CONF_FILE="${DEPLOY_CONF:-deploy.conf}"
+conf_val() {
+  [ -f "$CONF_FILE" ] || return 0
+  awk -F= -v k="$1" '
+    /^[[:space:]]*#/ { next }
+    $1 == k { sub(/^[^=]*=/, ""); gsub(/^"|"$/, ""); print; exit }
+  ' "$CONF_FILE"
+}
+pick() {                       # pick 配置名 命令行传入的值
+  if [ -n "$2" ]; then printf '%s' "$2"; else conf_val "$1"; fi
+}
+
+ENV_FILE="$(pick ENV_FILE "${ENV_FILE:-}")"
+DATA_PATH="$(pick DATA_PATH "${DATA_PATH:-}")"
+IMAGE_HOST_URL="$(pick IMAGE_HOST_URL "${IMAGE_HOST_URL:-}")"
+IMAGE_HOST_TOKEN="$(pick IMAGE_HOST_TOKEN "${IMAGE_HOST_TOKEN:-}")"
+JWT_SECRET="$(pick JWT_SECRET "${JWT_SECRET:-}")"
+ALLOW_REGISTER="$(pick ALLOW_REGISTER "${ALLOW_REGISTER:-}")"
+PORT="$(pick PORT "${PORT:-}")"
 
 # 1. 配置文件（不在代码目录里也行，用 ENV_FILE 指定）
 ENV_FILE="${ENV_FILE:-.env}"

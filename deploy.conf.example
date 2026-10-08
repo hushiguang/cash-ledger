@@ -1,0 +1,19 @@
+# 用法：cp deploy.conf.example deploy.conf，改好后直接 ./scripts/deploy.sh
+# deploy.conf 不会进 git，token 不会泄露到仓库。
+# 想临时换值：PORT=8080 ./scripts/deploy.sh（命令行优先）
+
+# 配置文件放哪（不跟着代码走，重建容器也不丢）
+ENV_FILE=/vol1/1000/docker/cash/.env
+
+# 数据目录：数据库 ledger.db 和登录密钥都在这里
+DATA_PATH=/vol1/1000/docker/cash/data
+
+# 服务端口
+PORT=10091
+
+# 是否开放注册。注册完管理员后改成 false，再跑一次 ./scripts/deploy.sh
+ALLOW_REGISTER=true
+
+# 图床（账单图片上传用）
+IMAGE_HOST_URL=https://image.coooo.tech:1443/api/index.php
+IMAGE_HOST_TOKEN=1c17b11693cb5ec63859b091c5b9c1b2
