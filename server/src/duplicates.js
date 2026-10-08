@@ -160,38 +160,48 @@ export function findDuplicatePairs(userId, options = {}) {
   sql += ' ORDER BY t1.occurred_at DESC';
   const candidates = db.prepare(sql).all(...args);
 
+  const seen = new Set(candidates.map((row) => `${row.a_id}-${row.b_id}`));
+
   // 交易单号相同 = 同一笔账单被导入了两次。它可能落在同一个账户上，
   // 上面的「同额 + 分属不同账户」匹配抓不到，所以单独再找一遍。
-  const idArgs = [userId, type];
-  let idSql = `
-    SELECT t1.id AS a_id, t2.id AS b_id
-    FROM transactions t1
-    JOIN transactions t2
-      ON t2.user_id = t1.user_id
-      AND t2.type = t1.type
-      AND t2.id > t1.id
-      AND TRIM(COALESCE(t1.external_id, '')) <> ''
-      AND TRIM(COALESCE(t2.external_id, '')) = TRIM(COALESCE(t1.external_id, ''))
-    WHERE t1.user_id = ? AND t1.type = ?
+  // 注意：不能在 JOIN 里用 TRIM() 比较（那样索引失效，会退化成平方级全表扫描），
+  // 这里只取一遍单号，分组配对放在内存里做。
+  const extArgs = [userId, type];
+  let extSql = `
+    SELECT id, external_id
+    FROM transactions
+    WHERE user_id = ? AND type = ? AND COALESCE(external_id, '') <> ''
   `;
   if (options.bookId) {
-    idSql += ' AND t1.book_id = ? AND t2.book_id = ?';
-    idArgs.push(Number(options.bookId), Number(options.bookId));
+    extSql += ' AND book_id = ?';
+    extArgs.push(Number(options.bookId));
   }
   if (options.from) {
-    idSql += ' AND t1.occurred_at >= ?';
-    idArgs.push(String(options.from).slice(0, 10));
+    extSql += ' AND occurred_at >= ?';
+    extArgs.push(String(options.from).slice(0, 10));
   }
   if (options.to) {
-    idSql += " AND t1.occurred_at < date(?, '+1 day')";
-    idArgs.push(String(options.to).slice(0, 10));
+    extSql += " AND occurred_at < date(?, '+1 day')";
+    extArgs.push(String(options.to).slice(0, 10));
   }
-  const seen = new Set(candidates.map((row) => `${row.a_id}-${row.b_id}`));
-  for (const row of db.prepare(idSql).all(...idArgs)) {
-    const key = `${row.a_id}-${row.b_id}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    candidates.push(row);
+  const byExternal = new Map();
+  for (const row of db.prepare(extSql).all(...extArgs)) {
+    const key = String(row.external_id || '').trim();
+    if (!key) continue;
+    if (!byExternal.has(key)) byExternal.set(key, []);
+    byExternal.get(key).push(row.id);
+  }
+  for (const ids of byExternal.values()) {
+    if (ids.length < 2) continue;
+    const sorted = [...ids].sort((x, y) => x - y);
+    for (let i = 0; i < sorted.length - 1; i += 1) {
+      for (let j = i + 1; j < sorted.length; j += 1) {
+        const key = `${sorted[i]}-${sorted[j]}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        candidates.push({ a_id: sorted[i], b_id: sorted[j] });
+      }
+    }
   }
 
   // 微信/支付宝绑着银行卡消费时，钱包账单的「支付方式」会被归一成那张银行卡，
