@@ -41,6 +41,16 @@ function longestCommon(a, b) {
   return best;
 }
 
+// 备注里记的商户单号（跨平台可能是同一个，能互证是同一笔消费）
+function merchantOrderOf(text) {
+  const m = String(text || '').match(/(?:商户订单号|商家订单号|商户单号单号|商户单号)[：:]\s*([A-Za-z0-9_-]{8,})/);
+  return m ? m[1] : '';
+}
+
+function externalIdOf(row) {
+  return String(row.external_id || '').trim();
+}
+
 function channelMatch(from, to) {
   for (const ch of CHANNELS) {
     if (ch.payee.test(from.payee || '') && ch.account.test(to.account_name || '')) return ch.key;
@@ -51,6 +61,12 @@ function channelMatch(from, to) {
 
 export function scorePair(a, b) {
   const reasons = [];
+
+  // 交易单号一样 = 同一笔账单被记了两次，这是最硬的证据，不用再看别的
+  const ea = externalIdOf(a);
+  const eb = externalIdOf(b);
+  if (ea && ea === eb) return { score: 100, reasons: ['交易单号相同'] };
+
   let score = 40; // 金额相同且分属不同账户
 
   const aMin = toMinutes(a.occurred_at);
@@ -82,6 +98,14 @@ export function scorePair(a, b) {
   if (channel) {
     score += 20;
     reasons.push(`${channel}渠道互证`);
+  }
+
+  // 银行卡流水和钱包流水记的商户单号可能是同一个
+  const ma = merchantOrderOf(a.note);
+  const mb = merchantOrderOf(b.note);
+  if (ma && ma === mb) {
+    score += 25;
+    reasons.push('商户单号相同');
   }
 
   if (Number(a.amount_cents) >= 5000) score += 5; // 大额偶然撞号的概率低
@@ -131,6 +155,40 @@ export function findDuplicatePairs(userId, options = {}) {
   }
   sql += ' ORDER BY t1.occurred_at DESC';
   const candidates = db.prepare(sql).all(...args);
+
+  // 交易单号相同 = 同一笔账单被导入了两次。它可能落在同一个账户上，
+  // 上面的「同额 + 分属不同账户」匹配抓不到，所以单独再找一遍。
+  const idArgs = [userId, type];
+  let idSql = `
+    SELECT t1.id AS a_id, t2.id AS b_id
+    FROM transactions t1
+    JOIN transactions t2
+      ON t2.user_id = t1.user_id
+      AND t2.type = t1.type
+      AND t2.id > t1.id
+      AND TRIM(COALESCE(t1.external_id, '')) <> ''
+      AND TRIM(COALESCE(t2.external_id, '')) = TRIM(COALESCE(t1.external_id, ''))
+    WHERE t1.user_id = ? AND t1.type = ?
+  `;
+  if (options.bookId) {
+    idSql += ' AND t1.book_id = ? AND t2.book_id = ?';
+    idArgs.push(Number(options.bookId), Number(options.bookId));
+  }
+  if (options.from) {
+    idSql += ' AND t1.occurred_at >= ?';
+    idArgs.push(String(options.from).slice(0, 10));
+  }
+  if (options.to) {
+    idSql += " AND t1.occurred_at < date(?, '+1 day')";
+    idArgs.push(String(options.to).slice(0, 10));
+  }
+  const seen = new Set(candidates.map((row) => `${row.a_id}-${row.b_id}`));
+  for (const row of db.prepare(idSql).all(...idArgs)) {
+    const key = `${row.a_id}-${row.b_id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidates.push(row);
+  }
 
   if (!candidates.length) return [];
   const ids = [...new Set(candidates.flatMap((row) => [row.a_id, row.b_id]))];

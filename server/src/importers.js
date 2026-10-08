@@ -336,13 +336,14 @@ function wechatGoodsAggregated(goods) {
   return text.includes('交易类型：') && text.includes('商品描述：');
 }
 
-function wechatNote({ kind, payee, goods, status, id, merchantId, remark }) {
+function wechatNote({ kind, payee, goods, status, id, merchantId, remark, payMethod }) {
   if (wechatGoodsAggregated(goods)) return String(goods);
   return [
     `交易类型：${kind || ''}`,
     `交易对方：${payee || ''}`,
     `商品描述：${goods || ''}`,
     `状态：${status || ''}`,
+    `支付方式：${payMethod || ''}`,
     `微信交易单号：${id || ''}`,
     `商户单号单号：${merchantId || ''}`,
     `备注：${remark || ''}`,
@@ -367,7 +368,7 @@ export function parseWechat(matrix) {
       id = id || wechatField(goods, '微信交易单号');
     }
     const flow = flowOf({ kind, status, dir, accountName: account, payee });
-    const note = wechatNote({ kind, payee, goods, status, id, merchantId, remark });
+    const note = wechatNote({ kind, payee, goods, status, id, merchantId, remark, payMethod: account });
     const described = wechatGoodsAggregated(goods) ? wechatField(goods, '商品描述') : goods;
     const text = `${kind} ${payee} ${described} ${remark}`;
     let accountName = flow.accountName || account;
@@ -388,13 +389,14 @@ export function parseWechat(matrix) {
   });
 }
 
-function alipayNote({ category, payee, accountNo, goods, status, id, merchantId, remark }) {
+function alipayNote({ category, payee, accountNo, goods, status, id, merchantId, remark, payMethod }) {
   return [
     `交易类型：${category || ''}`,
     `交易对方：${payee || ''}`,
     `对方账号：${accountNo || ''}`,
     `商品描述：${goods || ''}`,
     `状态：${status || ''}`,
+    `收/付款方式：${payMethod || ''}`,
     `支付宝交易单号：${id || ''}`,
     `商户订单号：${merchantId || ''}`,
     `备注：${remark || ''}`,
@@ -425,7 +427,7 @@ export function parseAlipay(matrix) {
     const paidToMe = /收益发放|奖励发放|收益补贴/.test(describedText);
     const note = aggregated
       ? String(goods)
-      : alipayNote({ category, payee, accountNo, goods: described, status, id, merchantId, remark });
+      : alipayNote({ category, payee, accountNo, goods: described, status, id, merchantId, remark, payMethod: account });
     return {
       occurredAt: parseDateTime(at(row, col(headers, ['付款时间', '交易时间', '交易创建时间']))),
       type: flow.type,
@@ -447,7 +449,7 @@ export function parseAlipay(matrix) {
   });
 }
 
-function jdNote({ category, payee, goods, status, id, merchantId, remark }) {
+function jdNote({ category, payee, goods, status, id, merchantId, remark, payMethod }) {
   if (wechatGoodsAggregated(goods)) return String(goods);
   return [
     `交易类型：${category || ''}`,
@@ -455,6 +457,7 @@ function jdNote({ category, payee, goods, status, id, merchantId, remark }) {
     `对方账号：${payee || ''}`,
     `商品描述：${goods || ''}`,
     `状态：${status || ''}`,
+    `收/付款方式：${payMethod || ''}`,
     `京东交易单号：${id || ''}`,
     `商户订单号：${merchantId || ''}`,
     `备注：${remark || ''}`,
@@ -487,7 +490,7 @@ export function parseJd(matrix) {
       remark = remark || wechatField(goods, '备注');
     }
     const flow = flowOf({ kind: `${payee} ${described}`, status, dir, accountName: account, payee });
-    const note = jdNote({ category, payee, goods: described, status, id, merchantId, remark });
+    const note = jdNote({ category, payee, goods: described, status, id, merchantId, remark, payMethod: account });
     return {
       occurredAt: parseDateTime(time),
       type: flow.type,
