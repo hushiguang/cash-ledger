@@ -37,7 +37,37 @@ cd web && npm install && npm run dev
 
 ## Docker 部署
 
-`docker-compose.yml` 是多阶段构建镜像：前端打包进镜像，数据挂在 `./data`。
+`docker-compose.yml` 是多阶段构建镜像：前端打包进镜像。**配置和数据都在宿主机的固定目录**，不跟着代码走，重建容器不丢：
+
+| 内容 | 位置 |
+| --- | --- |
+| 配置 `.env` | `ENV_FILE` 指定，例如 `/vol1/1000/docker/cash/.env` |
+| 数据库、登录密钥 | `DATA_PATH` 指定，例如 `/vol1/1000/docker/cash/data` |
+| 代码 | git 仓库目录，随便放 |
+
+### 从 git 部署（推荐）
+
+`.env` 里有密钥，不进仓库，所以配置和启动都由 `scripts/deploy.sh` 完成。
+
+```bash
+git clone <你的仓库地址> qingji && cd qingji
+
+# 首次启动：指定配置和数据目录，并把图床配置写进去
+ENV_FILE=/vol1/1000/docker/cash/.env \
+DATA_PATH=/vol1/1000/docker/cash/data \
+IMAGE_HOST_URL=https://image.example.com/api/index.php \
+IMAGE_HOST_TOKEN=你的token \
+./scripts/deploy.sh
+
+# 以后更新（配置已存在，不用再带变量）
+ENV_FILE=/vol1/1000/docker/cash/.env ./scripts/deploy.sh
+```
+
+脚本会：生成/更新配置 → `git pull` → 建数据目录 → `docker compose --env-file <配置> up -d --build` → 打印访问地址。
+
+可选：`SEED_DB=/path/to/ledger.db`（首次放入已有数据库）、`SKIP_PULL=1`、`NO_BUILD=1`、`ALLOW_REGISTER=false`、`PORT=10091`。
+
+### 手动部署
 
 ```bash
 cp .env.example .env      # 按需修改
@@ -54,7 +84,13 @@ docker compose up -d --build
 node --experimental-sqlite scripts/export-db.mjs
 ```
 
-产物是 `./data/ledger.db`，正好是 compose 挂载的目录。覆盖前会自动备份旧库，也可用 `SRC_DB=… OUT_DIR=…` 指定路径。
+也可以用 `OUT_DIR` 直接导出到目标目录：
+
+```bash
+OUT_DIR=/vol1/1000/docker/cash/data node --experimental-sqlite scripts/export-db.mjs
+```
+
+把这个 `ledger.db` 放到 NAS 的数据目录（`DATA_PATH`）下即可（scp 或文件管理都行），服务启动时会直接用它，登录原来的账号就能看到全部账单。覆盖前脚本会自动备份旧库。
 
 ## 环境变量
 
@@ -68,7 +104,8 @@ node --experimental-sqlite scripts/export-db.mjs
 | `IMAGE_HOST_TOKEN` | — | 图床 token |
 | `PORT` | `8080` | 服务端口 |
 | `TZ` | `Asia/Shanghai` | 时区 |
-| `DATA_DIR` | `/data` | 容器内数据目录 |
+| `DATA_PATH` | `./data` | 宿主机数据目录，映射到容器 `/data` |
+| `DATA_DIR` | `/data` | 容器内数据目录，一般不用改 |
 
 ## 导入与自动归类
 
@@ -113,5 +150,6 @@ server/          后端（Express + SQLite）
 web/             前端（React + Vite）
   src/App.jsx       全部页面
   src/styles.css    样式
-scripts/export-db.mjs  本地库 → Docker 数据目录
+scripts/export-db.mjs  本地库 → 数据目录快照
+scripts/deploy.sh      从 git 拉取并启动/更新（写入 .env 配置）
 ```
