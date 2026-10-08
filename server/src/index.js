@@ -1,6 +1,11 @@
+import dns from 'node:dns';
 import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
+
+// Docker 默认网络没有 IPv6。Node 默认按系统返回顺序解析，会先试 IPv6 导致 ENETUNREACH。
+// 这里改成优先 IPv4，图床等外部请求才不会卡在不可达的 IPv6 地址上。
+dns.setDefaultResultOrder('ipv4first');
 import cors from 'cors';
 import multer from 'multer';
 import { db } from './db.js';

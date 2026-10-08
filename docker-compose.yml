@@ -1,6 +1,9 @@
 services:
   qingji:
     build: .
+    # 默认走端口映射。
+    # 如果外部服务（例如图床）只有 IPv6 地址，Docker bridge 网络连不上会报 ENETUNREACH，
+    # 此时注释掉下面的 ports，改用 network_mode: host（访问端口就是 PORT 本身）。
     ports:
       - "${PORT:-8080}:${PORT:-8080}"
     volumes:
@@ -8,6 +11,8 @@ services:
     environment:
       TZ: Asia/Shanghai
       DATA_DIR: /data
+      # Docker 默认网络没有 IPv6，解析优先走 IPv4，避免图床请求 ENETUNREACH
+      NODE_OPTIONS: ${NODE_OPTIONS:---dns-result-order=ipv4first}
       PORT: "${PORT:-8080}"
       JWT_SECRET: ${JWT_SECRET:-}
       ALLOW_REGISTER: ${ALLOW_REGISTER:-true}

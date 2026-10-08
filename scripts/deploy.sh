@@ -19,6 +19,7 @@
 #   NO_BUILD=1                   不重新构建镜像（只改配置时用）
 #   ALLOW_REGISTER=false         开关注册
 #   PORT=10091                   改端口
+#   NETWORK_MODE=host            用宿主机网络（外部服务只有 IPv6 时必须开）
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -43,6 +44,7 @@ IMAGE_HOST_TOKEN="$(pick IMAGE_HOST_TOKEN "${IMAGE_HOST_TOKEN:-}")"
 JWT_SECRET="$(pick JWT_SECRET "${JWT_SECRET:-}")"
 ALLOW_REGISTER="$(pick ALLOW_REGISTER "${ALLOW_REGISTER:-}")"
 PORT="$(pick PORT "${PORT:-}")"
+NETWORK_MODE="$(pick NETWORK_MODE "${NETWORK_MODE:-}")"
 
 # 1. 配置文件（不在代码目录里也行，用 ENV_FILE 指定）
 ENV_FILE="${ENV_FILE:-.env}"
@@ -92,11 +94,22 @@ if [ "${SKIP_PULL:-0}" != "1" ] && git rev-parse --is-inside-work-tree >/dev/nul
   fi
 fi
 
-# 4. 选 compose 命令
+# 4. 选 compose 文件与命令
+# NETWORK_MODE=host 时生成一份本地 compose（不进 git，拉取代码不会被覆盖），
+# 容器直接用宿主机网络，外部服务只有 IPv6 地址时也能连上。
+COMPOSE_FILE=docker-compose.yml
+if [ "${NETWORK_MODE:-}" = "host" ]; then
+  COMPOSE_FILE=docker-compose.host.yml
+  sed -e 's|^    ports:|    network_mode: host|' \
+      -e '/^      - "\${PORT:-8080}:\${PORT:-8080}"$/d' \
+      docker-compose.yml > "$COMPOSE_FILE"
+  echo "网络模式：host（已生成 $COMPOSE_FILE）"
+fi
+
 if docker compose version >/dev/null 2>&1; then
-  DC=(docker compose --env-file "$ENV_FILE")
+  DC=(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE")
 elif command -v docker-compose >/dev/null 2>&1; then
-  DC=(docker-compose --env-file "$ENV_FILE")
+  DC=(docker-compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE")
 else
   echo "没找到 docker compose，先装：sudo apt install -y docker-compose-plugin"
   exit 1
