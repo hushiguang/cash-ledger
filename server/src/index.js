@@ -758,12 +758,21 @@ function transactionWhere(user, query) {
   return { where, params };
 }
 
+// 账单排序。默认按时间倒序；按金额排时，同额再按时间倒序。
+// 绝对值排序用来把「大额的收入和支出」一起挑出来，不看收支方向。
+const TRANSACTION_SORTS = {
+  amount_asc: 't.amount_cents ASC, t.occurred_at DESC, t.id DESC',
+  amount_desc: 't.amount_cents DESC, t.occurred_at DESC, t.id DESC',
+  amount_abs: 'ABS(t.amount_cents) DESC, t.occurred_at DESC, t.id DESC',
+};
+
 function transactionRows(user, query, limit) {
   const { where, params } = transactionWhere(user, query);
+  const order = TRANSACTION_SORTS[String(query.sort || '')] || 't.occurred_at DESC, t.id DESC';
   const sql = `
     ${selectTransactions()}
     WHERE ${where.join(' AND ')}
-    ORDER BY t.occurred_at DESC, t.id DESC
+    ORDER BY ${order}
     ${limit ? 'LIMIT ?' : ''}
   `;
   if (limit) params.push(limit);

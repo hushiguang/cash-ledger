@@ -603,6 +603,14 @@ const SOURCES = {
   shared: '共享补账',
 };
 
+// 账单列表排序。空 = 按时间倒序（默认，按天分组）；其余按金额，不分组
+const BILL_SORTS = [
+  ['', '按时间'],
+  ['amount_desc', '金额高→低'],
+  ['amount_asc', '金额低→高'],
+  ['amount_abs', '绝对值高→低'],
+];
+
 async function fetchExport(format, query = '') {
   const params = new URLSearchParams(String(query).replace(/^\?/, ''));
   params.set('format', format);
@@ -1349,14 +1357,17 @@ function Bills() {
   const [categoryId, setCategoryId] = useState('');
   const [minAmount, setMinAmount] = useState('');
   const [maxAmount, setMaxAmount] = useState('');
+  const [sort, setSort] = useState('');
   const [error, setError] = useState('');
   const [selected, setSelected] = useState(null);
   const [pendingDelete, setPendingDelete] = useState(null);
   const [exporting, setExporting] = useState('');
   const [clearing, setClearing] = useState(false);
   const bookId = activeBookId || '';
-  function queryString() {
+  function queryString(overrides) {
     const params = new URLSearchParams();
+    const sortValue = overrides?.sort ?? sort;
+    if (sortValue) params.set('sort', sortValue);
     if (q.trim()) params.set('q', q.trim());
     if (from) params.set('from', from);
     if (to) params.set('to', to);
@@ -1373,8 +1384,8 @@ function Bills() {
   const cats = categories.filter((c) => !c.archived && (!type || c.kind === type));
   const catParents = cats.filter((c) => !c.parentId);
   const catChildrenOf = (id) => cats.filter((c) => c.parentId === id);
-  async function load() {
-    const data = await api(`/api/transactions${queryString()}`);
+  async function load(overrides) {
+    const data = await api(`/api/transactions${queryString(overrides)}`);
     setRows(data.transactions);
     setTotal(data.total ?? data.transactions.length);
   }
@@ -1406,7 +1417,9 @@ function Bills() {
       setError(err.message);
     }
   }
-  const groups = groupByDay(rows);
+  // 按金额排序时不再按天分组，平铺展示
+  const groups = sort ? (rows.length ? [{ day: '', items: rows }] : []) : groupByDay(rows);
+  const sortLabel = BILL_SORTS.find(([value]) => value === sort)?.[1] || '按金额排序';
   return (
     <>
       <div className="page-head">
@@ -1471,28 +1484,40 @@ function Bills() {
           <input placeholder="对方、备注、分类、账户、金额" value={q} onChange={(e) => setQ(e.target.value)} />
         </label>
         <button className="primary" type="submit">查询</button>
-        {(type || source || categoryId || from || to || minAmount !== '' || maxAmount !== '' || q.trim()) && (
+        {(type || source || categoryId || from || to || minAmount !== '' || maxAmount !== '' || q.trim() || sort) && (
           <button
             className="ghost"
             type="button"
             onClick={() => {
               setType(''); setSource(''); setCategoryId(''); setFrom(''); setTo('');
-              setMinAmount(''); setMaxAmount(''); setQ('');
-              load().catch((err) => setError(err.message));
+              setMinAmount(''); setMaxAmount(''); setQ(''); setSort('');
+              load({ sort: '' }).catch((err) => setError(err.message));
             }}
           >
             重置
           </button>
         )}
       </form>
-      <p className="query-count muted">
-        {total > rows.length ? `共 ${total} 笔，显示最近 ${rows.length} 笔` : `共 ${total} 笔`}
-      </p>
+      <div className="query-count muted">
+        <div className="segment" role="tablist" aria-label="排序方式">
+          {BILL_SORTS.map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              className={sort === value ? 'active' : ''}
+              onClick={() => { setSort(value); load({ sort: value }).catch((err) => setError(err.message)); }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <span>{total > rows.length ? `共 ${total} 笔，显示最近 ${rows.length} 笔` : `共 ${total} 笔`}</span>
+      </div>
       <div className="card ledger">
         {groups.map((group) => (
           <section key={group.day}>
             <div className="tx-day">
-              <span>{formatDay(group.day)}</span>
+              <span>{group.day ? formatDay(group.day) : sortLabel}</span>
               <span>{group.items.length} 笔</span>
             </div>
             {group.items.map((tx) => {
