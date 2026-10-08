@@ -1,7 +1,26 @@
+# 依赖与构建产物
 node_modules/
 dist/
-data/
-*.db
-.env
-.DS_Store
 server/public/
+
+# 账本数据（私人账单，绝不入库）
+data/
+server/data/
+*.db
+*.db-wal
+*.db-shm
+*.db.bak-*
+*.sqlite
+*.sqlite3
+jwt.secret
+
+# 密钥与本地配置
+.env
+
+# 导入/导出的账单流水（私人数据）
+*.csv
+*.xlsx
+*.xls
+*.pdf
+
+.DS_Store

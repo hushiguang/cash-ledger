@@ -254,7 +254,7 @@ function Shell({ user, onLogout, onSaved, children }) {
     <BooksContext.Provider value={books}>
       <div className="app-shell">
         <aside className="sidebar">
-          <div className="brand">青记<span className="brand-sub">LEDGER</span></div>
+          <div className="brand">轻账单<span className="brand-sub">LEDGER</span></div>
           <BookSwitch books={bookList} currentBookId={currentBookId} onChange={setCurrentBookId} />
           <button className="primary new-bill" type="button" onClick={() => setCreating(true)}>＋ 记一笔</button>
           <nav className="sidenav">
@@ -312,7 +312,7 @@ function AuthScreen({ onLogin }) {
     <div className="auth">
       <div className="auth-theme"><ThemeSwitch /></div>
       <form className="card auth-card stack" onSubmit={submit}>
-        <h1>青记</h1>
+        <h1>轻账单</h1>
         <p className="muted">{mode === 'register' ? '创建账号后会带上常用账户和分类。' : '登录后记账、导入账单、查看日历。'}</p>
         {error && <div className="error">{error}</div>}
         <label>用户名<input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required /></label>
@@ -617,7 +617,7 @@ async function fetchExport(format, query = '') {
   if (!blob.size) throw new Error('导出文件是空的');
   const disposition = response.headers.get('Content-Disposition') || '';
   const matched = disposition.match(/filename\*=UTF-8''([^;]+)/);
-  const filename = matched ? decodeURIComponent(matched[1]) : `青记账单.${format}`;
+  const filename = matched ? decodeURIComponent(matched[1]) : `轻账单.${format}`;
   return { blob, filename };
 }
 
@@ -2934,7 +2934,7 @@ function SharePage() {
     return (
       <div className="auth">
         <div className="card auth-card stack">
-          <h1>青记</h1>
+          <h1>轻账单</h1>
           <div className="error">{error}</div>
           <p className="muted">链接可能已失效，找账本所有者要一下新的。</p>
         </div>

@@ -774,7 +774,7 @@ app.get('/api/transactions', authRequired, (req, res) => {
 app.get('/api/export', authRequired, (req, res) => {
   const format = req.query.format === 'csv' ? 'csv' : 'xlsx';
   const rows = transactionRows(req.user, req.query);
-  const filename = `青记账单-${todayString()}.${format}`;
+  const filename = `轻账单-${todayString()}.${format}`;
   if (format === 'csv') {
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', attachmentName(filename));
@@ -1395,5 +1395,5 @@ app.use((err, _req, res, _next) => {
 const port = Number(process.env.PORT) || 8080;
 app.listen(port, '0.0.0.0', () => {
   startScheduler();
-  console.log(`青记服务已启动 http://127.0.0.1:${port}`);
+  console.log(`轻账单服务已启动 http://127.0.0.1:${port}`);
 });
