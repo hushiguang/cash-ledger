@@ -1,0 +1,17 @@
+services:
+  qingji:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      TZ: Asia/Shanghai
+      DATA_DIR: /data
+      PORT: "8080"
+      JWT_SECRET: ${JWT_SECRET:-}
+      ALLOW_REGISTER: ${ALLOW_REGISTER:-true}
+      # 图床（EasyImages2.0）
+      IMAGE_HOST_URL: ${IMAGE_HOST_URL:-https://image.coooo.tech:1443/api/index.php}
+      IMAGE_HOST_TOKEN: ${IMAGE_HOST_TOKEN:-1c17b11693cb5ec63859b091c5b9c1b2}
+    restart: unless-stopped
