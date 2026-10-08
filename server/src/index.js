@@ -688,6 +688,24 @@ function bookScope(user, query) {
   return { sql: `t.book_id IN (${ids.map(() => '?').join(',')})`, params: ids };
 }
 
+// 选账户时把合并过的账户一起带上：旧账户（merged_into 指向主账户）本身没有账单，
+// 账单都挂在主账户上，所以选中任意一个都要展开成「主账户 + 它所有旧账户」。
+function expandAccountIds(ids) {
+  if (!ids.length) return [];
+  const parentOf = new Map(db.prepare('SELECT id, merged_into FROM accounts').all().map((row) => [row.id, row.merged_into || null]));
+  function rootOf(id) {
+    let current = id;
+    for (let i = 0; i < 20 && parentOf.get(current); i += 1) current = parentOf.get(current);
+    return current;
+  }
+  const roots = new Set(ids.map(rootOf));
+  const out = new Set(roots);
+  for (const [child, parent] of parentOf) {
+    if (parent && roots.has(rootOf(parent))) out.add(child);
+  }
+  return [...out];
+}
+
 // 把「元」换成「分」，没填或填错了就返回 null（不参与筛选）
 function amountCents(value) {
   const text = String(value ?? '').trim();
@@ -707,6 +725,16 @@ function transactionWhere(user, query) {
   if (query.to) {
     where.push("t.occurred_at < date(?, '+1 day')");
     params.push(String(query.to).slice(0, 10));
+  }
+  // 账户筛选，支持多个 id。转账的转出/转入账户都要算进来
+  const accountIds = expandAccountIds(String(query.accountIds || query.accountId || '')
+    .split(',')
+    .map(Number)
+    .filter((value) => Number.isInteger(value) && value > 0));
+  if (accountIds.length) {
+    const marks = accountIds.map(() => '?').join(',');
+    where.push(`(t.account_id IN (${marks}) OR t.to_account_id IN (${marks}))`);
+    params.push(...accountIds, ...accountIds);
   }
   if (['expense', 'income', 'transfer'].includes(String(query.type || ''))) {
     where.push('t.type = ?');
@@ -766,7 +794,7 @@ const TRANSACTION_SORTS = {
   amount_abs: 'ABS(t.amount_cents) DESC, t.occurred_at DESC, t.id DESC',
 };
 
-function transactionRows(user, query, limit) {
+function transactionRows(user, query, limit, offset) {
   const { where, params } = transactionWhere(user, query);
   const order = TRANSACTION_SORTS[String(query.sort || '')] || 't.occurred_at DESC, t.id DESC';
   const sql = `
@@ -774,8 +802,10 @@ function transactionRows(user, query, limit) {
     WHERE ${where.join(' AND ')}
     ORDER BY ${order}
     ${limit ? 'LIMIT ?' : ''}
+    ${limit && offset ? 'OFFSET ?' : ''}
   `;
   if (limit) params.push(limit);
+  if (limit && offset) params.push(offset);
   return db.prepare(sql).all(...params);
 }
 
@@ -798,7 +828,10 @@ function attachmentName(filename) {
 }
 
 app.get('/api/transactions', authRequired, (req, res) => {
-  const rows = transactionRows(req.user, req.query, 500);
+  // limit 默认 500、最多 5000，配合 offset 翻页，界面上「加载更多」一直能翻到最后一笔
+  const limit = Math.min(Math.max(Number(req.query.limit) || 500, 1), 5000);
+  const offset = Math.max(Number(req.query.offset) || 0, 0);
+  const rows = transactionRows(req.user, req.query, limit, offset);
   const total = transactionTotal(req.user, req.query);
   const images = transactionImages(rows.map((row) => row.id));
   res.json({ transactions: rows.map((row) => presentTransaction(row, images.get(row.id) || [])), total });

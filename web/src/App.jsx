@@ -603,6 +603,9 @@ const SOURCES = {
   shared: '共享补账',
 };
 
+// 账单列表每次拉多少条，「加载更多」按这个步长继续追加
+const BILL_PAGE_SIZE = 500;
+
 // 账单列表排序。空 = 按时间倒序（默认，按天分组）；其余按金额，不分组
 const BILL_SORTS = [
   ['', '按时间'],
@@ -1358,6 +1361,9 @@ function Bills() {
   const [minAmount, setMinAmount] = useState('');
   const [maxAmount, setMaxAmount] = useState('');
   const [sort, setSort] = useState('');
+  const [accountId, setAccountId] = useState('');
+  const [offset, setOffset] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState('');
   const [selected, setSelected] = useState(null);
   const [pendingDelete, setPendingDelete] = useState(null);
@@ -1367,7 +1373,11 @@ function Bills() {
   function queryString(overrides) {
     const params = new URLSearchParams();
     const sortValue = overrides?.sort ?? sort;
+    const offsetValue = overrides?.offset ?? offset;
     if (sortValue) params.set('sort', sortValue);
+    if (accountId) params.set('accountIds', accountId);
+    if (offsetValue) params.set('offset', offsetValue);
+    params.set('limit', String(BILL_PAGE_SIZE));
     if (q.trim()) params.set('q', q.trim());
     if (from) params.set('from', from);
     if (to) params.set('to', to);
@@ -1384,10 +1394,26 @@ function Bills() {
   const cats = categories.filter((c) => !c.archived && (!type || c.kind === type));
   const catParents = cats.filter((c) => !c.parentId);
   const catChildrenOf = (id) => cats.filter((c) => c.parentId === id);
-  async function load(overrides) {
-    const data = await api(`/api/transactions${queryString(overrides)}`);
-    setRows(data.transactions);
+  async function load(overrides, append = false) {
+    // 换筛选条件时从头开始；「加载更多」才追加
+    const next = append ? { ...overrides } : { offset: 0, ...overrides };
+    if (!append) setOffset(0);
+    const data = await api(`/api/transactions${queryString(next)}`);
+    setRows((prev) => (append ? [...prev, ...data.transactions] : data.transactions));
     setTotal(data.total ?? data.transactions.length);
+  }
+  async function loadMore() {
+    const next = rows.length;
+    setOffset(next);
+    setLoadingMore(true);
+    setError('');
+    try {
+      await load({ offset: next }, true);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoadingMore(false);
+    }
   }
   async function download(format) {
     setExporting(format);
@@ -1447,6 +1473,15 @@ function Bills() {
             {Object.entries(SOURCES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
         </label>
+        <label>账户
+          <select value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+            <option value="">全部</option>
+            {/* 只列主账户：已合并的旧账户本身没有账单，选它查不到东西 */}
+            {books.accounts.filter((a) => !a.archived && !a.mergedInto).map((a) => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </select>
+        </label>
         <label>分类
           <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
             <option value="">全部</option>
@@ -1484,12 +1519,12 @@ function Bills() {
           <input placeholder="对方、备注、分类、账户、金额" value={q} onChange={(e) => setQ(e.target.value)} />
         </label>
         <button className="primary" type="submit">查询</button>
-        {(type || source || categoryId || from || to || minAmount !== '' || maxAmount !== '' || q.trim() || sort) && (
+        {(type || source || accountId || categoryId || from || to || minAmount !== '' || maxAmount !== '' || q.trim() || sort) && (
           <button
             className="ghost"
             type="button"
             onClick={() => {
-              setType(''); setSource(''); setCategoryId(''); setFrom(''); setTo('');
+              setType(''); setSource(''); setAccountId(''); setCategoryId(''); setFrom(''); setTo('');
               setMinAmount(''); setMaxAmount(''); setQ(''); setSort('');
               load({ sort: '' }).catch((err) => setError(err.message));
             }}
@@ -1511,7 +1546,11 @@ function Bills() {
             </button>
           ))}
         </div>
-        <span>{total > rows.length ? `共 ${total} 笔，显示最近 ${rows.length} 笔` : `共 ${total} 笔`}</span>
+        <span>
+          {total > rows.length
+            ? `共 ${total} 笔，已显示 ${rows.length} 笔`
+            : `共 ${total} 笔${rows.length ? '（全部）' : ''}`}
+        </span>
       </div>
       <div className="card ledger">
         {groups.map((group) => (
@@ -1542,6 +1581,13 @@ function Bills() {
           </section>
         ))}
         {rows.length === 0 && <p className="muted">没有账单。</p>}
+        {rows.length > 0 && rows.length < total && (
+          <div className="load-more">
+            <button className="secondary" type="button" disabled={loadingMore} onClick={loadMore}>
+              {loadingMore ? '加载中…' : `加载更多（还有 ${total - rows.length} 笔）`}
+            </button>
+          </div>
+        )}
       </div>
       {selected && (
         <BillDetail
