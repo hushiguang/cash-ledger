@@ -833,7 +833,8 @@ h2 .tx-flag { margin-left: 8px; vertical-align: 2px; }
 .dup-pair { display: grid; gap: 12px; }
 .dup-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .dup-head b { font-family: "Source Serif 4", serif; font-size: 18px; }
-.dup-sides { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+/* 一组可能不止两条，列数跟着条数走 */
+.dup-sides { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
 .dup-side {
   display: grid;
   gap: 6px;
@@ -844,6 +845,7 @@ h2 .tx-flag { margin-left: 8px; vertical-align: 2px; }
   background: var(--soft);
 }
 .dup-side .dup-title { font-weight: 600; overflow-wrap: anywhere; }
+.tag.accent { background: var(--coral); color: #fff; }
 .dup-side button { justify-self: start; }
 /* 批量选择：工具条常驻在列表上方，勾选后卡片描边高亮 */
 .dup-bulk { position: sticky; top: 8px; z-index: 2; padding: 10px 12px; }

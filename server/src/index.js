@@ -55,7 +55,7 @@ import {
 } from './books.js';
 import { fetchImage, isAllowedImageUrl, uploadImage } from './imagehost.js';
 import { parseFile } from './importers.js';
-import { findDuplicatePairs, ignorePair, listIgnores, unignorePair } from './duplicates.js';
+import { findDuplicatePairs, groupDuplicates, ignorePair, listIgnores, unignorePair } from './duplicates.js';
 import { normalizeAccountName, resolveCategoryPath } from './taxonomy.js';
 import { toCsv, toXlsx } from './export.js';
 import {
@@ -1029,11 +1029,18 @@ app.get('/api/duplicates', authRequired, wrap((req, res) => {
     to: req.query.to || null,
     sort: req.query.sort,
   });
+  // 同一笔可能有三四条记录，把互相重叠的配对并成组，界面按组展示
+  const ignored = new Set(listIgnores(req.user.id));
+  const groups = groupDuplicates(pairs, { sort: req.query.sort })
+    .filter((group) => !ignored.has(group.key));
   res.json({
     pairs,
-    ignoredCount: listIgnores(req.user.id).length,
-    // 去掉重复后能省下多少钱 = 每对各算一笔
-    duplicateAmount: pairs.reduce((sum, pair) => sum + Number(pair.amount), 0).toFixed(2),
+    groups,
+    ignoredCount: ignored.size,
+    // 能省下的钱 = 每组留下一条，其余都算重复
+    duplicateAmount: groups
+      .reduce((sum, group) => sum + Number(group.amount) * (group.count - 1), 0)
+      .toFixed(2),
   });
 }));
 
@@ -1052,15 +1059,36 @@ app.delete('/api/duplicates/ignore', authRequired, (req, res) => {
   res.json({ ok: true });
 });
 
-// 批量去重：每对只留一条，删掉另一条。keep=earlier 保留时间早的，keep=later 保留晚的
+// 批量去重：每组只留一条，删掉其余。keep=earlier 保留时间早的，keep=later 保留晚的
+// 也支持直接传组方案：groups: [{ keepId, dropIds }]
 app.post('/api/duplicates/resolve', authRequired, wrap((req, res) => {
   const keys = Array.isArray(req.body?.keys)
     ? req.body.keys.map((k) => String(k || '')).filter(Boolean)
     : [];
-  if (!keys.length) return fail(res, 400, '请先选择要处理的重复账单');
+  const groupPlan = Array.isArray(req.body?.groups) ? req.body.groups : [];
+  if (!keys.length && !groupPlan.length) return fail(res, 400, '请先选择要处理的重复账单');
   const keep = req.body?.keep === 'later' ? 'later' : 'earlier';
   let removed = 0;
   let skipped = 0;
+
+  const del = db.prepare('DELETE FROM transactions WHERE id = ? AND user_id = ?');
+  for (const plan of groupPlan) {
+    const keepId = Number(plan?.keepId) || 0;
+    const dropIds = [...new Set((plan?.dropIds || []).map(Number).filter(Boolean))]
+      .filter((id) => id !== keepId);
+    if (!keepId || !dropIds.length) { skipped += 1; continue; }
+    const marks = dropIds.map(() => '?').join(',');
+    const rows = db.prepare(
+      `SELECT id FROM transactions WHERE user_id = ? AND id IN (${marks})`,
+    ).all(req.user.id, ...dropIds);
+    // 要删的已经不在了（别的组处理过），只删还剩下的
+    if (!rows.length) { skipped += 1; continue; }
+    for (const row of rows) {
+      del.run(row.id, req.user.id);
+      removed += 1;
+    }
+  }
+
   for (const key of keys) {
     const [aId, bId] = String(key).split('-').map(Number);
     if (!aId || !bId) { skipped += 1; continue; }

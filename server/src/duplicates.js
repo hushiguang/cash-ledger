@@ -278,6 +278,117 @@ export function findDuplicatePairs(userId, options = {}) {
   return pairs.sort(options.sort === 'score' ? byScore : byTime);
 }
 
+// 同一笔钱可能被记了三四条（钱包账单一条、银行卡流水一条、又不小心导入了一次……），
+// 两两配对会把它们拆成好几对，逐对选「保留哪条」很容易删错。
+// 这里把互相有重叠的配对合并成一组，界面按组展示：一组里挑一条留下，其余一起删。
+export function groupDuplicates(pairs, options = {}) {
+  const maxSize = Number(options.maxSize) || 12;
+
+  // 只有证据硬的配对才合并成一组：同一时刻、单号相同、商户单号相同，或者分数够高。
+  // 否则「金额相同但隔了几天」的小额消费（比如每天 5 元地铁）会被链式串成一大组，
+  // 一组二十几条再点「删其余」就是灾难。弱的配对各自单独成组，你自己看。
+  // 银行流水常常只有日期（时间戳是 00:00:00），同一天同额的不同消费会假装「同一时刻」，
+  // 这种不算硬证据，除非有单号互证
+  const hasTime = (tx) => !String(tx.occurredAt || '').endsWith('00:00:00');
+  // 分数高不代表能合并：连续几天在同一家店买同样价钱的早餐也能拿 90 分。
+  // 只有「同一秒 + 同一商户」或「单号互证」才敢认定是同一笔，其余一律单独成对让你自己看。
+  const isStrong = (pair) => (
+    pair.reasons.includes('交易单号相同')
+    || pair.reasons.includes('商户单号相同')
+    || (pair.reasons.includes('同一时刻')
+      && pair.reasons.includes('商户名一致')
+      && (hasTime(pair.a) || hasTime(pair.b)))
+  );
+
+  const parent = new Map();
+  const size = new Map();
+  const find = (x) => {
+    let root = x;
+    while (parent.get(root) !== root) root = parent.get(root);
+    while (parent.get(x) !== root) {
+      const next = parent.get(x);
+      parent.set(x, root);
+      x = next;
+    }
+    return root;
+  };
+  const add = (x) => {
+    if (parent.has(x)) return;
+    parent.set(x, x);
+    size.set(x, 1);
+  };
+  const union = (a, b) => {
+    add(a);
+    add(b);
+    const ra = find(a);
+    const rb = find(b);
+    if (ra === rb) return;
+    // 一组太大就不再往里连，避免一次误删一大片
+    if ((size.get(ra) || 1) + (size.get(rb) || 1) > maxSize) return;
+    parent.set(ra, rb);
+    size.set(rb, (size.get(ra) || 1) + (size.get(rb) || 1));
+  };
+
+  const txMap = new Map();
+  for (const pair of pairs) {
+    txMap.set(pair.a.id, pair.a);
+    txMap.set(pair.b.id, pair.b);
+  }
+
+  const strong = pairs.filter(isStrong);
+  for (const pair of strong) union(pair.a.id, pair.b.id);
+  const strongIds = new Set(strong.flatMap((pair) => [pair.a.id, pair.b.id]));
+
+  const build = (ids, score, reasons, amount) => {
+    const sorted = [...new Set(ids)].sort((x, y) => x - y);
+    const items = sorted
+      .map((id) => txMap.get(id))
+      .filter(Boolean)
+      .sort((x, y) => String(x.occurredAt).localeCompare(String(y.occurredAt)) || x.id - y.id);
+    if (items.length < 2) return null;
+    return {
+      key: sorted.join('-'),
+      ids: sorted,
+      score,
+      reasons: [...reasons],
+      amount,
+      count: items.length,
+      items,
+    };
+  };
+
+  const groups = [];
+  const buckets = new Map();
+  for (const pair of strong) {
+    const root = find(pair.a.id);
+    if (!buckets.has(root)) buckets.set(root, { ids: new Set(), score: 0, reasons: new Set(), amount: pair.amount });
+    const bucket = buckets.get(root);
+    bucket.ids.add(pair.a.id);
+    bucket.ids.add(pair.b.id);
+    bucket.score = Math.max(bucket.score, pair.score);
+    pair.reasons.forEach((reason) => bucket.reasons.add(reason));
+  }
+  for (const bucket of buckets.values()) {
+    const group = build(bucket.ids, bucket.score, bucket.reasons, bucket.amount);
+    if (group) groups.push(group);
+  }
+  // 弱的配对单独成组；已经并进强组的那条不再重复出现，免得同一笔被删两次
+  for (const pair of pairs) {
+    if (isStrong(pair)) continue;
+    if (strongIds.has(pair.a.id) || strongIds.has(pair.b.id)) continue;
+    const group = build([pair.a.id, pair.b.id], pair.score, pair.reasons, pair.amount);
+    if (group) groups.push(group);
+  }
+
+  const byTime = (x, y) => (
+    String(y.items[0].occurredAt).localeCompare(String(x.items[0].occurredAt)) || y.score - x.score
+  );
+  const byScore = (x, y) => (
+    y.score - x.score || String(y.items[0].occurredAt).localeCompare(String(x.items[0].occurredAt))
+  );
+  return groups.sort(options.sort === 'score' ? byScore : byTime);
+}
+
 export function listIgnores(userId) {
   return db.prepare('SELECT pair_key FROM duplicate_ignores WHERE user_id = ? ORDER BY id DESC').all(userId)
     .map((row) => row.pair_key);

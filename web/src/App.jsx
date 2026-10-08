@@ -2401,8 +2401,8 @@ function DuplicatesPage() {
       setData(result);
       setLimit(30);
       setConfirm(null);
-      // 处理过的配对已经不在结果里了，顺手从选中集合里去掉
-      const alive = new Set(result.pairs.map((pair) => pair.key));
+      // 处理过的组已经不在结果里了，顺手从选中集合里去掉
+      const alive = new Set((result.groups || result.pairs).map((item) => item.key));
       setPicked((prev) => new Set([...prev].filter((key) => alive.has(key))));
     } catch (err) {
       if (seq.current === id) setError(err.message);
@@ -2423,18 +2423,25 @@ function DuplicatesPage() {
     }
     setBusy('');
   }
-  function keep(pair, pick) {
-    const drop = pick === 'a' ? pair.b : pair.a;
-    const keepSide = pick === 'a' ? pair.a : pair.b;
+  // 把「组」转成删除方案：留下 keepId，组内其余都删
+  function planOf(group, keepId) {
+    return { keepId, dropIds: group.ids.filter((id) => id !== keepId) };
+  }
+  function keepIn(group, tx) {
+    const dropCount = group.count - 1;
     setConfirm({
-      title: '删除另一条？',
-      body: `保留 ${formatWhen(keepSide.occurredAt)} · ${keepSide.accountName} · ${money(keepSide.amount)} 元，删除 ${formatWhen(drop.occurredAt)} · ${drop.accountName} · ${money(drop.amount)} 元。`,
+      title: `删除同组另外 ${dropCount} 笔？`,
+      body: `保留 ${formatWhen(tx.occurredAt)} · ${tx.accountName} · ${money(tx.amount)} 元，同组其余 ${dropCount} 笔一起删除。`,
       confirmLabel: '确定删除',
-      onConfirm: () => act(pair.key, () => api(`/api/transactions/${drop.id}`, { method: 'DELETE' })),
+      onConfirm: () => act(group.key, () => api('/api/duplicates/resolve', {
+        method: 'POST',
+        body: { groups: [planOf(group, tx.id)] },
+      })),
     });
   }
   const pairs = data?.pairs || [];
-  const shown = pairs.slice(0, limit);
+  const groups = data?.groups || [];
+  const shown = groups.slice(0, limit);
 
   function toggle(key) {
     setPicked((prev) => {
@@ -2447,32 +2454,42 @@ function DuplicatesPage() {
   function toggleAll(list) {
     setPicked((prev) => {
       const next = new Set(prev);
-      const allOn = list.every((pair) => next.has(pair.key));
-      list.forEach((pair) => (allOn ? next.delete(pair.key) : next.add(pair.key)));
+      const allOn = list.every((item) => next.has(item.key));
+      list.forEach((item) => (allOn ? next.delete(item.key) : next.add(item.key)));
       return next;
     });
   }
-  const pickedPairs = pairs.filter((pair) => picked.has(pair.key));
-  const pickedAmount = pickedPairs.reduce((sum, pair) => sum + Number(pair.amount), 0);
+  const pickedGroups = groups.filter((group) => picked.has(group.key));
+  // 每组留下一条，其余都算要删的
+  const pickedAmount = pickedGroups.reduce((sum, group) => sum + Number(group.amount) * (group.count - 1), 0);
+  const pickedDropCount = pickedGroups.reduce((sum, group) => sum + group.count - 1, 0);
 
   function bulkIgnore() {
-    if (!pickedPairs.length) return;
+    if (!pickedGroups.length) return;
     setConfirm({
-      title: `标记 ${pickedPairs.length} 对为「不是重复」？`,
-      body: '之后这些配对不会再出现在查重列表里。',
+      title: `标记 ${pickedGroups.length} 组为「不是重复」？`,
+      body: '之后这些组不会再出现在查重列表里。',
       danger: false,
       confirmLabel: '确定忽略',
-      onConfirm: () => act('bulk', () => api('/api/duplicates/ignore', { method: 'POST', body: { keys: pickedPairs.map((pair) => pair.key) } })),
+      onConfirm: () => act('bulk', () => api('/api/duplicates/ignore', { method: 'POST', body: { keys: pickedGroups.map((group) => group.key) } })),
     });
   }
   function bulkResolve() {
-    if (!pickedPairs.length) return;
+    if (!pickedGroups.length) return;
     const rule = keepRule === 'later' ? '保留时间较晚的一条' : '保留时间较早的一条';
     setConfirm({
-      title: `删除 ${pickedPairs.length} 笔重复账单？`,
-      body: `每组${rule}，共删 ${pickedPairs.length} 笔、${money(pickedAmount)} 元。`,
+      title: `删除 ${pickedDropCount} 笔重复账单？`,
+      body: `${pickedGroups.length} 组，每组${rule}，共删 ${pickedDropCount} 笔、${money(pickedAmount)} 元。`,
       confirmLabel: '确定删除',
-      onConfirm: () => act('bulk', () => api('/api/duplicates/resolve', { method: 'POST', body: { keys: pickedPairs.map((pair) => pair.key), keep: keepRule } })),
+      onConfirm: () => act('bulk', () => api('/api/duplicates/resolve', {
+        method: 'POST',
+        body: {
+          groups: pickedGroups.map((group) => planOf(
+            group,
+            (keepRule === 'later' ? group.items[group.items.length - 1] : group.items[0]).id,
+          )),
+        },
+      })),
     });
   }
   return (
@@ -2484,8 +2501,10 @@ function DuplicatesPage() {
         </div>
       </div>
       <p className="muted">
-        微信、支付宝绑着银行卡时，同一次付款可能被记两次：钱包账单一条，银行卡扣款一条。
-        这里把金额相同、时间接近、分属不同账户的账单配成对，按相似度打分，你逐对确认。
+        微信、支付宝绑着银行卡时，同一次付款可能被记两次：钱包账单一条，银行卡扣款一条；
+        要是同一份账单还导入过多次，可能记到三四条。
+        这里把金额相同、时间接近、互相吻合的账单归成一组，按相似度打分 ——
+        <b>一组里挑一条留下，其余一起删</b>，不用逐对判断。
         「相差 ≤N 天」指两笔账单之间允许的时间差；「全部 / 近一年…」才是账目发生的时间范围。
       </p>
       {error && <div className="error" style={{ marginBottom: 12 }}>{error}</div>}
@@ -2524,34 +2543,34 @@ function DuplicatesPage() {
       </section>
       {loading && <p className="muted">正在查找…</p>}
       <div className="grid stats">
-        <div className="card stat"><div className="label">疑似重复</div><div className="value">{loading ? '…' : data ? `${pairs.length} 对` : '—'}</div></div>
-        <div className="card stat"><div className="label">涉及金额</div><div className="value expense">{loading ? '…' : data ? money(data.duplicateAmount) : '—'}</div></div>
-        <div className="card stat"><div className="label">已忽略</div><div className="value">{loading ? '…' : data ? `${data.ignoredCount} 对` : '—'}</div></div>
+        <div className="card stat"><div className="label">疑似重复</div><div className="value">{loading ? '…' : data ? `${groups.length} 组` : '—'}</div></div>
+        <div className="card stat"><div className="label">可省下金额</div><div className="value expense">{loading ? '…' : data ? money(data.duplicateAmount) : '—'}</div></div>
+        <div className="card stat"><div className="label">已忽略</div><div className="value">{loading ? '…' : data ? `${data.ignoredCount} 组` : '—'}</div></div>
       </div>
       {data?.ignoredCount > 0 && (
         <div className="row" style={{ marginBottom: 12 }}>
           <button className="secondary" type="button" onClick={() => act('unignore', () => api('/api/duplicates/ignore', { method: 'DELETE' }))}>
-            恢复已忽略的 {data.ignoredCount} 对
+            恢复已忽略的 {data.ignoredCount} 组
           </button>
         </div>
       )}
-      {pairs.length > 0 && (
+      {groups.length > 0 && (
         <div className="card dup-bulk">
           <div className="row" style={{ flexWrap: 'wrap' }}>
             <label className="dup-pick">
               <input
                 type="checkbox"
-                checked={shown.every((pair) => picked.has(pair.key))}
+                checked={shown.every((group) => picked.has(group.key))}
                 onChange={() => toggleAll(shown)}
                 aria-label="全选当前显示"
               />
-              全选当前 {shown.length} 对
+              全选当前 {shown.length} 组
             </label>
-            <span className="tiny muted">已选 {pickedPairs.length} 对 · {money(pickedAmount)} 元</span>
-            {pairs.length > shown.length && (
-              <button className="ghost small" type="button" onClick={() => toggleAll(pairs)}>选中全部 {pairs.length} 对</button>
+            <span className="tiny muted">已选 {pickedGroups.length} 组 · 将删 {pickedDropCount} 笔 · {money(pickedAmount)} 元</span>
+            {groups.length > shown.length && (
+              <button className="ghost small" type="button" onClick={() => toggleAll(groups)}>选中全部 {groups.length} 组</button>
             )}
-            {pickedPairs.length > 0 && (
+            {pickedGroups.length > 0 && (
               <button className="ghost small" type="button" onClick={() => setPicked(new Set())}>清空选择</button>
             )}
             <span className="spacer" />
@@ -2560,37 +2579,38 @@ function DuplicatesPage() {
                 <button key={value} type="button" className={keepRule === value ? 'active' : ''} onClick={() => setKeepRule(value)}>{label}</button>
               ))}
             </div>
-            <button className="secondary small" type="button" disabled={!pickedPairs.length || busy === 'bulk'} onClick={bulkIgnore}>不是重复</button>
-            <button className="danger small" type="button" disabled={!pickedPairs.length || busy === 'bulk'} onClick={bulkResolve}>
-              {busy === 'bulk' ? '处理中…' : `删除重复的 ${pickedPairs.length} 笔`}
+            <button className="secondary small" type="button" disabled={!pickedGroups.length || busy === 'bulk'} onClick={bulkIgnore}>不是重复</button>
+            <button className="danger small" type="button" disabled={!pickedGroups.length || busy === 'bulk'} onClick={bulkResolve}>
+              {busy === 'bulk' ? '处理中…' : `删除重复的 ${pickedDropCount} 笔`}
             </button>
           </div>
         </div>
       )}
       <div className="list">
-        {shown.map((pair) => (
-          <div className={`card dup-pair${picked.has(pair.key) ? ' picked' : ''}`} key={pair.key}>
+        {shown.map((group) => (
+          <div className={`card dup-pair${picked.has(group.key) ? ' picked' : ''}`} key={group.key}>
             <div className="dup-head">
               <label className="dup-pick">
-                <input type="checkbox" checked={picked.has(pair.key)} onChange={() => toggle(pair.key)} aria-label="选择这一对" />
+                <input type="checkbox" checked={picked.has(group.key)} onChange={() => toggle(group.key)} aria-label="选择这一组" />
               </label>
-              <b>{money(pair.amount)}</b>
-              <span className="tag">{pair.score >= 90 ? '很像' : '可能'}</span>
-              <span className="tiny muted">{pair.reasons.join(' · ')}</span>
+              <b>{money(group.amount)}</b>
+              <span className="tag">{group.score >= 90 ? '很像' : '可能'}</span>
+              <span className="tag accent">{group.count} 条重复</span>
+              <span className="tiny muted">{group.reasons.join(' · ')}</span>
               <div className="row" style={{ marginLeft: 'auto' }}>
-                <button className="ghost" type="button" disabled={busy === pair.key} onClick={() => act(pair.key, () => api('/api/duplicates/ignore', { method: 'POST', body: { key: pair.key } }))}>不是重复</button>
+                <button className="ghost" type="button" disabled={busy === group.key} onClick={() => act(group.key, () => api('/api/duplicates/ignore', { method: 'POST', body: { key: group.key } }))}>不是重复</button>
               </div>
             </div>
             <div className="dup-sides">
-              {[['a', pair.a], ['b', pair.b]].map(([side, tx]) => (
-                <div className="dup-side" key={side}>
+              {group.items.map((tx) => (
+                <div className="dup-side" key={tx.id}>
                   <div className="tiny muted">{formatWhen(tx.occurredAt)}</div>
                   <div className="dup-title">{tx.payee || tx.categoryName || '—'}</div>
                   <div className="tiny muted">
                     {[tx.accountName, tx.categoryName, tx.note].filter(Boolean).join(' · ')}
                   </div>
-                  <button className="primary small" type="button" disabled={busy === pair.key} onClick={() => keep(pair, side)}>
-                    保留这条
+                  <button className="primary small" type="button" disabled={busy === group.key} onClick={() => keepIn(group, tx)}>
+                    留这条，删其余 {group.count - 1} 笔
                   </button>
                 </div>
               ))}
@@ -2598,12 +2618,12 @@ function DuplicatesPage() {
           </div>
         ))}
         {loading && !data && <div className="card"><p className="muted">正在查找…</p></div>}
-        {data && pairs.length === 0 && <div className="card"><p className="muted">没有找到疑似重复的账单，试试放宽条件。</p></div>}
-        {pairs.length > limit && (
+        {data && groups.length === 0 && <div className="card"><p className="muted">没有找到疑似重复的账单，试试放宽条件。</p></div>}
+        {groups.length > limit && (
           <div className="row">
-            <span className="tiny muted">共 {pairs.length} 对，已显示 {limit} 对</span>
+            <span className="tiny muted">共 {groups.length} 组，已显示 {limit} 组</span>
             <button className="secondary" type="button" onClick={() => setLimit((n) => n + 30)}>显示更多</button>
-            <button className="ghost" type="button" onClick={() => setLimit(pairs.length)}>全部展开</button>
+            <button className="ghost" type="button" onClick={() => setLimit(groups.length)}>全部展开</button>
           </div>
         )}
       </div>
