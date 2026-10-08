@@ -1,11 +1,11 @@
 services:
   qingji:
     build: .
-    # 默认走端口映射。
-    # 如果外部服务（例如图床）只有 IPv6 地址，Docker bridge 网络连不上会报 ENETUNREACH，
-    # 此时注释掉下面的 ports，改用 network_mode: host（访问端口就是 PORT 本身）。
-    ports:
-      - "${PORT:-8080}:${PORT:-8080}"
+    # 用宿主机网络：图床 image.coooo.tech 只有 IPv6 地址，Docker bridge 网络连不上（ENETUNREACH），
+    # 容器必须与 NAS 共用网络栈才能访问 IPv6。
+    # 访问端口就是 PORT 本身（不做映射），例如 PORT=10091 → http://NAS的IP:10091
+    # 想改回端口映射：NETWORK_MODE=bridge ./scripts/deploy.sh
+    network_mode: host
     volumes:
       - ${DATA_PATH:-./data}:/data
     environment:

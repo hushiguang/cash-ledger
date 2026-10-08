@@ -11,6 +11,10 @@ DATA_PATH=/vol1/1000/docker/cash/data
 # 服务端口
 PORT=10091
 
+# 网络模式。默认 host：容器直接用 NAS 网络，IPv6 也能访问（图床只有 IPv6 时必须）。
+# 想改回端口映射（比如端口被占用、要配合反向代理）：
+# NETWORK_MODE=bridge
+
 # 是否开放注册。注册完管理员后改成 false，再跑一次 ./scripts/deploy.sh
 ALLOW_REGISTER=true
 

@@ -19,13 +19,18 @@
 #   NO_BUILD=1                   不重新构建镜像（只改配置时用）
 #   ALLOW_REGISTER=false         开关注册
 #   PORT=10091                   改端口
-#   NETWORK_MODE=host            用宿主机网络（外部服务只有 IPv6 时必须开）
+#   NETWORK_MODE=bridge          改回端口映射（默认是 host，直接用 NAS 网络）
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # 0. 读 deploy.conf（本地配置，不进 git）。命令行传进来的同名变量优先。
 CONF_FILE="${DEPLOY_CONF:-deploy.conf}"
+# 第一次跑没有 deploy.conf，就从模板生成一份，改完下次直接 ./scripts/deploy.sh
+if [ ! -f "$CONF_FILE" ] && [ -f deploy.conf.example ]; then
+  cp deploy.conf.example "$CONF_FILE"
+  echo "已用 deploy.conf.example 生成 $CONF_FILE，按需改里面的路径和 token"
+fi
 conf_val() {
   [ -f "$CONF_FILE" ] || return 0
   awk -F= -v k="$1" '
@@ -95,15 +100,14 @@ if [ "${SKIP_PULL:-0}" != "1" ] && git rev-parse --is-inside-work-tree >/dev/nul
 fi
 
 # 4. 选 compose 文件与命令
-# NETWORK_MODE=host 时生成一份本地 compose（不进 git，拉取代码不会被覆盖），
-# 容器直接用宿主机网络，外部服务只有 IPv6 地址时也能连上。
+# 默认 host：容器用 NAS 的网络栈，才能访问只有 IPv6 地址的图床。
+# NETWORK_MODE=bridge 时改用端口映射（生成的本地文件不进 git，拉取代码不会被覆盖）。
 COMPOSE_FILE=docker-compose.yml
-if [ "${NETWORK_MODE:-}" = "host" ]; then
-  COMPOSE_FILE=docker-compose.host.yml
-  sed -e 's|^    ports:|    network_mode: host|' \
-      -e '/^      - "\${PORT:-8080}:\${PORT:-8080}"$/d' \
+if [ "${NETWORK_MODE:-}" = "bridge" ]; then
+  COMPOSE_FILE=docker-compose.bridge.yml
+  sed -e 's|^    network_mode: host|    ports:\n      - "${PORT:-8080}:${PORT:-8080}"|' \
       docker-compose.yml > "$COMPOSE_FILE"
-  echo "网络模式：host（已生成 $COMPOSE_FILE）"
+  echo "网络模式：bridge（已生成 $COMPOSE_FILE，走端口映射）"
 fi
 
 if docker compose version >/dev/null 2>&1; then

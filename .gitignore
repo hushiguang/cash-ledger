@@ -17,7 +17,7 @@ jwt.secret
 # 密钥与本地配置
 .env
 deploy.conf
-docker-compose.host.yml
+docker-compose.bridge.yml
 
 # 导入/导出的账单流水（私人数据）
 *.csv
