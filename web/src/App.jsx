@@ -1337,6 +1337,7 @@ function CalendarPage() {
 
 function Bills() {
   const books = useBooks();
+  const { categories } = books;
   const activeBookId = books.currentBookId;
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
@@ -1345,6 +1346,9 @@ function Bills() {
   const [to, setTo] = useState('');
   const [type, setType] = useState('');
   const [source, setSource] = useState('');
+  const [categoryId, setCategoryId] = useState('');
+  const [minAmount, setMinAmount] = useState('');
+  const [maxAmount, setMaxAmount] = useState('');
   const [error, setError] = useState('');
   const [selected, setSelected] = useState(null);
   const [pendingDelete, setPendingDelete] = useState(null);
@@ -1358,10 +1362,17 @@ function Bills() {
     if (to) params.set('to', to);
     if (type) params.set('type', type);
     if (source) params.set('source', source);
+    if (categoryId) params.set('categoryIds', categoryId);
+    if (minAmount !== '') params.set('minAmount', minAmount);
+    if (maxAmount !== '') params.set('maxAmount', maxAmount);
     if (bookId) params.set('bookId', bookId);
     const text = params.toString();
     return text ? `?${text}` : '';
   }
+  // 分类下拉跟着账单类型走：选了支出就只列支出分类
+  const cats = categories.filter((c) => !c.archived && (!type || c.kind === type));
+  const catParents = cats.filter((c) => !c.parentId);
+  const catChildrenOf = (id) => cats.filter((c) => c.parentId === id);
   async function load() {
     const data = await api(`/api/transactions${queryString()}`);
     setRows(data.transactions);
@@ -1423,12 +1434,56 @@ function Bills() {
             {Object.entries(SOURCES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
         </label>
+        <label>分类
+          <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
+            <option value="">全部</option>
+            <option value="none">未分类</option>
+            {catParents.map((parent) => (
+              <optgroup key={parent.id} label={parent.name}>
+                <option value={parent.id}>{parent.name}（含子分类）</option>
+                {catChildrenOf(parent.id).map((child) => <option key={child.id} value={child.id}>{child.name}</option>)}
+              </optgroup>
+            ))}
+          </select>
+        </label>
         <label>开始<input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
         <label>结束<input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
+        <label>金额
+          <span className="amount-range">
+            <input
+              type="number"
+              step="0.01"
+              placeholder="最小"
+              value={minAmount}
+              onChange={(e) => setMinAmount(e.target.value)}
+            />
+            <span className="muted">–</span>
+            <input
+              type="number"
+              step="0.01"
+              placeholder="最大"
+              value={maxAmount}
+              onChange={(e) => setMaxAmount(e.target.value)}
+            />
+          </span>
+        </label>
         <label className="grow">关键词
           <input placeholder="对方、备注、分类、账户、金额" value={q} onChange={(e) => setQ(e.target.value)} />
         </label>
         <button className="primary" type="submit">查询</button>
+        {(type || source || categoryId || from || to || minAmount !== '' || maxAmount !== '' || q.trim()) && (
+          <button
+            className="ghost"
+            type="button"
+            onClick={() => {
+              setType(''); setSource(''); setCategoryId(''); setFrom(''); setTo('');
+              setMinAmount(''); setMaxAmount(''); setQ('');
+              load().catch((err) => setError(err.message));
+            }}
+          >
+            重置
+          </button>
+        )}
       </form>
       <p className="query-count muted">
         {total > rows.length ? `共 ${total} 笔，显示最近 ${rows.length} 笔` : `共 ${total} 笔`}

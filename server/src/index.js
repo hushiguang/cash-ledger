@@ -688,6 +688,14 @@ function bookScope(user, query) {
   return { sql: `t.book_id IN (${ids.map(() => '?').join(',')})`, params: ids };
 }
 
+// 把「元」换成「分」，没填或填错了就返回 null（不参与筛选）
+function amountCents(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+  const cents = yuanToCents(text);
+  return Number.isFinite(cents) ? cents : null;
+}
+
 function transactionWhere(user, query) {
   const scope = bookScope(user, query);
   const where = [scope.sql];
@@ -726,6 +734,17 @@ function transactionWhere(user, query) {
   }
   if (wantUncategorized) categoryClauses.push('(t.category_id IS NULL OR c.id IS NULL)');
   if (categoryClauses.length) where.push(`(${categoryClauses.join(' OR ')})`);
+  // 金额区间，单位是元
+  const minCents = amountCents(query.minAmount);
+  if (minCents !== null) {
+    where.push('t.amount_cents >= ?');
+    params.push(minCents);
+  }
+  const maxCents = amountCents(query.maxAmount);
+  if (maxCents !== null) {
+    where.push('t.amount_cents <= ?');
+    params.push(maxCents);
+  }
   const keyword = String(query.q || '').trim();
   if (keyword) {
     where.push(`(

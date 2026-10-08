@@ -667,6 +667,9 @@ tbody tr:last-child td { border-bottom: 0; }
 .search-row label { min-width: 140px; }
 .search-row label.grow { flex: 1; min-width: 220px; }
 .search-row .primary { align-self: flex-end; }
+/* 金额区间：两个小输入框并排 */
+.search-row .amount-range { display: inline-flex; align-items: center; gap: 6px; }
+.search-row .amount-range input { width: 92px; }
 .query-count { margin: 10px 4px; }
 .book-card {
   margin-bottom: 14px;
