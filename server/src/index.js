@@ -773,15 +773,21 @@ function transactionWhere(user, query) {
     where.push('t.amount_cents <= ?');
     params.push(maxCents);
   }
+  // 关键词：空格分词，每个词都要命中（AND）。
+  // 覆盖界面上看得见的所有字段：对方、备注、分类、账户、成员、自定义分类、金额、类型
   const keyword = String(query.q || '').trim();
   if (keyword) {
-    where.push(`(
-      t.payee LIKE ? OR t.note LIKE ? OR c.name LIKE ? OR p.name LIKE ?
-      OR a.name LIKE ? OR b.name LIKE ?
-      OR printf('%.2f', t.amount_cents / 100.0) LIKE ?
-    )`);
-    const q = `%${keyword}%`;
-    params.push(q, q, q, q, q, q, q);
+    const words = keyword.split(/\s+/).filter(Boolean).slice(0, 6);
+    for (const word of words) {
+      const like = `%${word}%`;
+      where.push(`(
+        t.payee LIKE ? OR t.note LIKE ? OR c.name LIKE ? OR p.name LIKE ?
+        OR a.name LIKE ? OR b.name LIKE ? OR t.member_name LIKE ? OR t.category_label LIKE ?
+        OR printf('%.2f', t.amount_cents / 100.0) LIKE ?
+        OR CASE t.type WHEN 'expense' THEN '支出' WHEN 'income' THEN '收入' ELSE '转账' END LIKE ?
+      )`);
+      params.push(like, like, like, like, like, like, like, like, like, like);
+    }
   }
   return { where, params };
 }

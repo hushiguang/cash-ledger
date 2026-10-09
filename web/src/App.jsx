@@ -1516,7 +1516,7 @@ function Bills() {
           </span>
         </label>
         <label className="grow">关键词
-          <input placeholder="对方、备注、分类、账户、金额" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input placeholder="对方、备注、分类、账户、金额（空格分隔多个词）" value={q} onChange={(e) => setQ(e.target.value)} />
         </label>
         <button className="primary" type="submit">查询</button>
         {(type || source || accountId || categoryId || from || to || minAmount !== '' || maxAmount !== '' || q.trim() || sort) && (
