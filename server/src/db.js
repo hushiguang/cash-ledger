@@ -126,6 +126,17 @@ db.exec(`
     UNIQUE (user_id, kind, alias)
   );
 
+  -- 自动分类规则：账单的对方/备注里含这个关键词，就归到这个分类
+  CREATE TABLE IF NOT EXISTS category_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    keyword TEXT NOT NULL,
+    category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    UNIQUE (user_id, keyword)
+  );
+  CREATE INDEX IF NOT EXISTS ix_category_rules_user ON category_rules(user_id);
+
   CREATE TABLE IF NOT EXISTS duplicate_ignores (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

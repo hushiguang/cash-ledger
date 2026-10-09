@@ -1420,6 +1420,109 @@ function previewNewNames(userId, rows) {
   return { newAccounts: [...newAccounts], newCategories: [...newCategories] };
 }
 
+// 关键词 → 分类。命中的是「对方 / 备注 / 外部分类名」里最长的一条规则，越长越具体
+function loadCategoryRules(userId) {
+  return db.prepare(`
+    SELECT r.id, r.keyword, r.category_id AS categoryId, c.name AS categoryName, c.kind
+    FROM category_rules r JOIN categories c ON c.id = r.category_id
+    WHERE r.user_id = ? AND c.archived = 0
+  `).all(userId).sort((a, b) => b.keyword.length - a.keyword.length);
+}
+
+function matchCategoryRule(rules, row) {
+  const text = [row.payee, row.note, row.categoryName].filter(Boolean).join(' ').toLowerCase();
+  if (!text.trim()) return null;
+  for (const rule of rules) {
+    if (text.includes(rule.keyword.toLowerCase())) return rule;
+  }
+  return null;
+}
+
+app.get('/api/category-rules', authRequired, (req, res) => {
+  res.json({ rules: loadCategoryRules(req.user.id) });
+});
+
+app.post('/api/category-rules', authRequired, wrap((req, res) => {
+  const keyword = String(req.body.keyword || '').trim();
+  if (!keyword) return fail(res, 400, '请填写关键词');
+  const category = categoryOwned(req.user.id, Number(req.body.categoryId));
+  if (!category) return fail(res, 400, '请选择分类');
+  db.prepare(`
+    INSERT INTO category_rules (user_id, keyword, category_id, created_at) VALUES (?, ?, ?, ?)
+    ON CONFLICT (user_id, keyword) DO UPDATE SET category_id = excluded.category_id
+  `).run(req.user.id, keyword, category.id, new Date().toISOString());
+  res.json({ ok: true });
+}));
+
+app.delete('/api/category-rules/:id', authRequired, wrap((req, res) => {
+  db.prepare('DELETE FROM category_rules WHERE id = ? AND user_id = ?').run(Number(req.params.id), req.user.id);
+  res.json({ ok: true });
+}));
+
+// 把规则套到已有账单上。默认只补未分类的，避免覆盖已经分好的
+app.post('/api/category-rules/apply', authRequired, wrap((req, res) => {
+  const rules = loadCategoryRules(req.user.id);
+  const dryRun = !!req.body.dryRun;
+  const onlyUncategorized = req.body.onlyUncategorized !== false;
+  const rows = db.prepare(
+    `SELECT id, payee, note FROM transactions WHERE user_id = ?${onlyUncategorized ? ' AND category_id IS NULL' : ''}`,
+  ).all(req.user.id);
+  const hits = [];
+  const update = db.prepare('UPDATE transactions SET category_id = ? WHERE id = ?');
+  db.exec('BEGIN');
+  try {
+    for (const row of rows) {
+      const rule = matchCategoryRule(rules, row);
+      if (!rule) continue;
+      hits.push({ id: row.id, categoryId: rule.categoryId });
+      if (!dryRun) update.run(rule.categoryId, row.id);
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  res.json({ matched: hits.length, updated: dryRun ? 0 : hits.length });
+}));
+
+// 合并同名重复分类：账单和子分类都归到保留的那个，重复的删掉
+app.post('/api/categories/merge-duplicates', authRequired, wrap((req, res) => {
+  const rows = db.prepare('SELECT * FROM categories WHERE user_id = ? ORDER BY id').all(req.user.id);
+  const groups = new Map();
+  for (const row of rows) {
+    const key = `${row.kind}\0${row.name}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+  let merged = 0;
+  let moved = 0;
+  db.exec('BEGIN');
+  try {
+    for (const list of groups.values()) {
+      if (list.length < 2) continue;
+      // 保留未归档里 id 最小的，实在都归档了就保留第一个
+      const keep = list.find((item) => !item.archived) || list[0];
+      for (const dup of list) {
+        if (dup.id === keep.id) continue;
+        const info = db.prepare('UPDATE transactions SET category_id = ? WHERE user_id = ? AND category_id = ?')
+          .run(keep.id, req.user.id, dup.id);
+        moved += info.changes;
+        db.prepare('UPDATE categories SET parent_id = ? WHERE parent_id = ?').run(keep.parent_id, dup.id);
+        db.prepare('UPDATE category_rules SET category_id = ? WHERE category_id = ? AND user_id = ?')
+          .run(keep.id, dup.id, req.user.id);
+        db.prepare('DELETE FROM category_aliases WHERE user_id = ? AND category_id = ?').run(req.user.id, dup.id);
+        db.prepare('DELETE FROM categories WHERE id = ?').run(dup.id);
+        merged += 1;
+      }
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  res.json({ merged, moved });
+}));
+
 const uploadImports = upload.fields([
   { name: 'files', maxCount: 30 },
   { name: 'file', maxCount: 1 },
@@ -1435,6 +1538,13 @@ app.post('/api/import/preview', authRequired, uploadImports, wrap(async (req, re
   }
   const parsedFiles = await Promise.all(files.map((file) => parseUpload(file, req.body.source || 'auto', mapping)));
   const rows = parsedFiles.flatMap((file) => file.rows || []);
+  // 解析没给出分类的，按自动分类规则补上，预览里就能看到归类结果
+  const rules = loadCategoryRules(req.user.id);
+  for (const row of rows) {
+    if (row.skipReason || row.categoryName) continue;
+    const hit = matchCategoryRule(rules, row);
+    if (hit) row.categoryName = hit.categoryName;
+  }
   res.json({
     files: parsedFiles,
     needsMapping: parsedFiles.some((file) => file.needsMapping),

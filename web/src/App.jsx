@@ -2327,6 +2327,18 @@ function CategoriesPage() {
   const [notice, setNotice] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [confirm, setConfirm] = useState(null);
+  const [rules, setRules] = useState([]);
+  const [ruleKeyword, setRuleKeyword] = useState('');
+  const [ruleCategoryId, setRuleCategoryId] = useState('');
+  const [applying, setApplying] = useState(false);
+
+  useEffect(() => {
+    api('/api/category-rules').then((data) => setRules(data.rules || [])).catch(() => {});
+  }, []);
+
+  function reloadRules() {
+    return api('/api/category-rules').then((data) => setRules(data.rules || []));
+  }
 
   const mine = categories.filter((c) => c.kind === kind);
   const tops = mine.filter((c) => !c.archived && !c.parentId);
@@ -2416,6 +2428,79 @@ function CategoriesPage() {
     });
   }
 
+  function addRule(event) {
+    event.preventDefault();
+    const keyword = ruleKeyword.trim();
+    if (!keyword || !ruleCategoryId) return;
+    setError('');
+    setNotice('');
+    api('/api/category-rules', { method: 'POST', body: { keyword, categoryId: Number(ruleCategoryId) } })
+      .then(() => { setRuleKeyword(''); return reloadRules(); })
+      .then(() => setNotice(`已添加规则：对方或备注含「${keyword}」→ 指定分类`))
+      .catch((err) => setError(err.message));
+  }
+
+  function removeRule(rule) {
+    setError('');
+    setNotice('');
+    api(`/api/category-rules/${rule.id}`, { method: 'DELETE' })
+      .then(reloadRules)
+      .then(() => setNotice(`已删除规则「${rule.keyword}」`))
+      .catch((err) => setError(err.message));
+  }
+
+  function applyRules() {
+    setError('');
+    setNotice('');
+    setApplying(true);
+    api('/api/category-rules/apply', { method: 'POST', body: { dryRun: true } })
+      .then((result) => {
+        setApplying(false);
+        if (!result.matched) {
+          setNotice('现有未分类的账单里，没有能被规则命中的。');
+          return;
+        }
+        setConfirm({
+          title: `给 ${result.matched} 笔未分类账单套用规则？`,
+          body: '只补还没有分类的账单，已经分好的不会被改动。',
+          confirmLabel: '套用',
+          onConfirm: () => {
+            setConfirm(null);
+            run(
+              () => api('/api/category-rules/apply', { method: 'POST' }),
+              (done) => `已归类 ${done.updated} 笔`,
+            );
+          },
+        });
+      })
+      .catch((err) => { setApplying(false); setError(err.message); });
+  }
+
+  // 同名重复分类：导入时重复创建的，合并后账单自动指向保留的那个
+  const duplicateNames = (() => {
+    const map = new Map();
+    for (const item of categories) {
+      const key = `${item.kind}\0${item.name}`;
+      map.set(key, (map.get(key) || 0) + 1);
+    }
+    return [...map.entries()].filter(([, count]) => count > 1).map(([key]) => key.split('\0')[1]);
+  })();
+
+  function mergeDuplicates() {
+    setConfirm({
+      title: `合并 ${duplicateNames.length} 个重名分类？`,
+      body: `${duplicateNames.join('、')} 各有多个。合并后账单和子分类都归到保留的那个，重复的会被删除，历史账单不受影响。`,
+      confirmLabel: '合并',
+      onConfirm: () => {
+        setConfirm(null);
+        run(
+          () => api('/api/categories/merge-duplicates', { method: 'POST' }),
+          (result) => `已合并 ${result.merged} 个重名分类，${result.moved} 笔账单改指向保留的分类`,
+        );
+      },
+    });
+  }
+
   function startEdit(item) {
     setAdding(null);
     setEditing({ id: item.id, name: item.name });
@@ -2436,6 +2521,9 @@ function CategoriesPage() {
       <div className="page-head">
         <h1>分类</h1>
         <button className="secondary" type="button" onClick={() => { setAdding({ parentId: null }); setName(''); }}>新增一级分类</button>
+        {duplicateNames.length > 0 && (
+          <button className="secondary" type="button" onClick={mergeDuplicates}>合并 {duplicateNames.length} 个重名分类</button>
+        )}
       </div>
       {error && <div className="error" style={{ marginBottom: 12 }}>{error}</div>}
       {notice && <p className="muted" style={{ marginBottom: 12 }}>{notice}</p>}
@@ -2537,11 +2625,45 @@ function CategoriesPage() {
           <p className="muted" style={{ marginTop: 12 }}>导入的分类会按内置对照表落到这套分类上，认不出来的进「其他」。</p>
         </section>
       </div>
+      <section className="card" style={{ marginTop: 12 }}>
+        <div className="tree-head">
+          <h2>自动分类规则</h2>
+        </div>
+        <p className="muted">账单的「对方」或「备注」里含关键词，就自动归到指定分类。导入新账单时立刻生效；也可以一键套到已有账单上。同一个账单命中多条规则时，取关键词最长的那条。</p>
+        <div className="cat-chips" style={{ marginTop: 8 }}>
+          {rules.length === 0 && <span className="muted">还没有规则。比如「美团 → 餐饮」。</span>}
+          {rules.map((rule) => (
+            <span className="cat-chip" key={rule.id}>
+              <b>{rule.keyword}</b>
+              <span className="muted">→ {rule.categoryName}</span>
+              <button type="button" className="chip-btn danger" title="删除" onClick={() => removeRule(rule)}>✕</button>
+            </span>
+          ))}
+        </div>
+        <form className="cat-edit" onSubmit={addRule} style={{ marginTop: 10 }}>
+          <input value={ruleKeyword} onChange={(e) => setRuleKeyword(e.target.value)} placeholder="关键词，如 美团" required />
+          <select value={ruleCategoryId} onChange={(e) => setRuleCategoryId(e.target.value)} required>
+            <option value="">归到哪个分类</option>
+            {[['expense', '支出'], ['income', '收入']].map(([value, label]) => (
+              <optgroup key={value} label={label}>
+                {categories.filter((c) => !c.archived && c.kind === value).map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+          <button className="primary small" type="submit">添加规则</button>
+          <span className="spacer" />
+          <button className="secondary small" type="button" disabled={applying || !rules.length} onClick={applyRules}>
+            {applying ? '检查中…' : '套用到未分类账单'}
+          </button>
+        </form>
+      </section>
       {confirm && (
         <ConfirmModal
-          title={`确定${confirm.label}「${confirm.item.name}」？`}
+          title={confirm.title || `确定${confirm.label}「${confirm.item.name}」？`}
           body={confirm.body}
-          confirmLabel={`确定${confirm.label}`}
+          confirmLabel={confirm.confirmLabel || `确定${confirm.label}`}
           onClose={() => setConfirm(null)}
           onConfirm={confirm.onConfirm}
         />
