@@ -1750,6 +1750,8 @@ const THIRD_PARTY_CHANNELS = [
   ['jd', '京东', /京东|网银在线/],
 ];
 
+const CHANNEL_LABELS = { wechat: '微信', alipay: '支付宝', jd: '京东', none: '银行卡' };
+
 function thirdPartyChannel(row) {
   const text = `${row.payee || ''} ${row.note || ''}`;
   for (const [key, , pattern] of THIRD_PARTY_CHANNELS) {
@@ -1911,13 +1913,14 @@ function ImportPage() {
     return [...map.entries()].map(([name, count]) => ({ name, count })).sort((x, y) => y.count - x.count);
   })();
   const bankCount = rows.filter((row) => !row.skipReason && BANK_CHANNEL_RE.test(row.accountName || '')).length;
-  // 银行卡流水（招行 PDF）才需要区分第三方支付，钱包账单不需要这个下拉
-  const hasBankFile = parsed.some((file) => file.source === 'cmb');
   const channelCounts = { wechat: 0, alipay: 0, jd: 0, none: 0 };
   for (const row of rows) {
     if (row.skipReason) continue;
     channelCounts[thirdPartyChannel(row) || 'none'] += 1;
   }
+  // 银行卡流水才需要区分第三方支付：认来源，也认内容里有没有微信/支付宝/京东字样
+  const hasBankFile = parsed.some((file) => file.source === 'cmb')
+    || channelCounts.wechat + channelCounts.alipay + channelCounts.jd > 0;
   function matchesPay(row, value) {
     if (!value) return true;
     if (value === BANK_CHANNEL) return BANK_CHANNEL_RE.test(row.accountName || '');
@@ -2089,15 +2092,18 @@ function ImportPage() {
             ))}
           </div>
           <div className="search-row" style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap', margin: '8px 0' }}>
-            <label>只导入支付方式
-              <select value={payFilter} onChange={(e) => applyFilter(e.target.value, channelFilter)}>
-                <option value="">全部（{rows.filter((row) => !row.skipReason).length} 笔）</option>
-                {bankCount > 0 && <option value={BANK_CHANNEL}>银行卡渠道（{bankCount} 笔）</option>}
-                {payOptions.map((item) => (
-                  <option key={item.name} value={item.name}>{item.name}（{item.count} 笔）</option>
-                ))}
-              </select>
-            </label>
+            {/* 银行卡流水的支付方式全是同一个（招商银行），按它筛没意义，这时只留渠道下拉 */}
+            {(!hasBankFile || payOptions.length > 1) && (
+              <label>只导入支付方式
+                <select value={payFilter} onChange={(e) => applyFilter(e.target.value, channelFilter)}>
+                  <option value="">全部（{rows.filter((row) => !row.skipReason).length} 笔）</option>
+                  {bankCount > 0 && <option value={BANK_CHANNEL}>银行卡渠道（{bankCount} 笔）</option>}
+                  {payOptions.map((item) => (
+                    <option key={item.name} value={item.name}>{item.name}（{item.count} 笔）</option>
+                  ))}
+                </select>
+              </label>
+            )}
             {hasBankFile && (
               <label>银行卡里的第三方支付
                 <select value={channelFilter} onChange={(e) => applyFilter(payFilter, e.target.value)}>
@@ -2111,14 +2117,14 @@ function ImportPage() {
             )}
             {(payFilter || channelFilter) && (
               <>
-                <span className="muted">已选出 {shownRows.filter((item) => !item.row.skipReason).length} 笔</span>
+                <span className="muted">列表剩 {shownRows.filter((item) => !item.row.skipReason).length} 笔，已勾选 {readyCount} 笔</span>
                 <button className="secondary" type="button" onClick={() => applyFilter('', '')}>恢复全选</button>
               </>
             )}
           </div>
           <div className="preview">
             <table>
-              <thead><tr><th></th><th>文件</th><th>时间</th><th>类型</th><th>金额</th><th>对方</th><th>支付方式</th><th>说明</th></tr></thead>
+              <thead><tr><th></th><th>文件</th><th>时间</th><th>类型</th><th>金额</th><th>对方</th><th>支付方式</th>{hasBankFile && <th>渠道</th>}<th>说明</th></tr></thead>
               <tbody>
                 {visibleRows.map((row, index) => {
                   const rowIndex = visibleIndexes[index];
@@ -2131,6 +2137,7 @@ function ImportPage() {
                       <td>{row.amount}</td>
                       <td>{row.payee}</td>
                       <td>{row.accountName}</td>
+                      {hasBankFile && <td>{CHANNEL_LABELS[thirdPartyChannel(row) || 'none']}</td>}
                       <td className="muted clip wide">{row.skipReason || row.note || row.categoryName}</td>
                     </tr>
                   );
@@ -2141,8 +2148,8 @@ function ImportPage() {
           {shownRows.length > pageSize && (
             <div className="row pager">
               <button className="secondary" type="button" disabled={pageStart === 0} onClick={() => setPage((current) => Math.max(0, current - 1))}>上一页</button>
-              <span className="muted">{pageStart + 1}–{Math.min(pageStart + pageSize, rows.length)} / {rows.length}</span>
-              <button className="secondary" type="button" disabled={pageStart + pageSize >= rows.length} onClick={() => setPage((current) => current + 1)}>下一页</button>
+              <span className="muted">{pageStart + 1}–{Math.min(pageStart + pageSize, shownRows.length)} / {shownRows.length}</span>
+              <button className="secondary" type="button" disabled={pageStart + pageSize >= shownRows.length} onClick={() => setPage((current) => current + 1)}>下一页</button>
             </div>
           )}
         </section>
