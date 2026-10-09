@@ -1742,6 +1742,22 @@ const MAP_FIELDS = [
 const BANK_CHANNEL = '__bank__';
 const BANK_CHANNEL_RE = /银行|信用卡|储蓄卡|借记卡|贷记卡/;
 
+// 银行卡流水里的第三方支付：招行 PDF 的「客户摘要」会写「财付通-微信支付-xxx」这类，
+// 这些消费在微信/支付宝账单里也有一条，导入银行卡时可以整批剔掉，只留真正刷卡的部分。
+const THIRD_PARTY_CHANNELS = [
+  ['wechat', '微信（财付通）', /财付通|微信支付|微信转账|微信红包|微信/],
+  ['alipay', '支付宝', /支付宝|蚂蚁|alipay|花呗|网商/i],
+  ['jd', '京东', /京东|网银在线/],
+];
+
+function thirdPartyChannel(row) {
+  const text = `${row.payee || ''} ${row.note || ''}`;
+  for (const [key, , pattern] of THIRD_PARTY_CHANNELS) {
+    if (pattern.test(text)) return key;
+  }
+  return '';
+}
+
 const IMPORT_SOURCES = {
   wechat: '微信',
   alipay: '支付宝',
@@ -1879,6 +1895,8 @@ function ImportPage() {
   // 导入前先按「支付方式」筛一遍：微信/支付宝/京东账单里只有一部分是走银行卡付的，
   // 只想留这部分时在这里选，列表只显示并只勾选它。
   const [payFilter, setPayFilter] = useState('');
+  // 银行卡流水里的第三方支付：这些和微信/支付宝账单重复，导入银行卡 PDF 时可以整批剔掉
+  const [channelFilter, setChannelFilter] = useState('');
   const rows = parsed.flatMap((file) => file.rows || []);
   const readyCount = rows.filter((row, index) => picked[index] && !row.skipReason).length;
   const pageSize = 80;
@@ -1893,20 +1911,37 @@ function ImportPage() {
     return [...map.entries()].map(([name, count]) => ({ name, count })).sort((x, y) => y.count - x.count);
   })();
   const bankCount = rows.filter((row) => !row.skipReason && BANK_CHANNEL_RE.test(row.accountName || '')).length;
+  // 银行卡流水（招行 PDF）才需要区分第三方支付，钱包账单不需要这个下拉
+  const hasBankFile = parsed.some((file) => file.source === 'cmb');
+  const channelCounts = { wechat: 0, alipay: 0, jd: 0, none: 0 };
+  for (const row of rows) {
+    if (row.skipReason) continue;
+    channelCounts[thirdPartyChannel(row) || 'none'] += 1;
+  }
   function matchesPay(row, value) {
     if (!value) return true;
     if (value === BANK_CHANNEL) return BANK_CHANNEL_RE.test(row.accountName || '');
     return (row.accountName || '—') === value;
   }
-  function applyPayFilter(value) {
-    setPayFilter(value);
+  function matchesChannel(row, value) {
+    if (!value) return true;
+    const kind = thirdPartyChannel(row);
+    return value === 'none' ? !kind : kind === value;
+  }
+  function applyFilter(nextPay, nextChannel) {
+    setPayFilter(nextPay);
+    setChannelFilter(nextChannel);
     const next = {};
-    rows.forEach((row, index) => { next[index] = !row.skipReason && matchesPay(row, value); });
+    rows.forEach((row, index) => {
+      next[index] = !row.skipReason && matchesPay(row, nextPay) && matchesChannel(row, nextChannel);
+    });
     setPicked(next);
     setPage(0);
   }
   const shownRows = [];
-  rows.forEach((row, index) => { if (matchesPay(row, payFilter)) shownRows.push({ row, index }); });
+  rows.forEach((row, index) => {
+    if (matchesPay(row, payFilter) && matchesChannel(row, channelFilter)) shownRows.push({ row, index });
+  });
   const pageCount = Math.max(1, Math.ceil(shownRows.length / pageSize));
   const pageStart = Math.min(page, pageCount - 1) * pageSize;
   const visibleRows = shownRows.slice(pageStart, pageStart + pageSize).map((item) => item.row);
@@ -1936,6 +1971,7 @@ function ImportPage() {
     const flat = merged.flatMap((file) => file.rows || []);
     setPicked(Object.fromEntries(flat.map((row, index) => [index, !row.skipReason])));
     setPayFilter('');
+    setChannelFilter('');
     setPage(0);
   }
 
@@ -2054,7 +2090,7 @@ function ImportPage() {
           </div>
           <div className="search-row" style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap', margin: '8px 0' }}>
             <label>只导入支付方式
-              <select value={payFilter} onChange={(e) => applyPayFilter(e.target.value)}>
+              <select value={payFilter} onChange={(e) => applyFilter(e.target.value, channelFilter)}>
                 <option value="">全部（{rows.filter((row) => !row.skipReason).length} 笔）</option>
                 {bankCount > 0 && <option value={BANK_CHANNEL}>银行卡渠道（{bankCount} 笔）</option>}
                 {payOptions.map((item) => (
@@ -2062,10 +2098,21 @@ function ImportPage() {
                 ))}
               </select>
             </label>
-            {payFilter && (
+            {hasBankFile && (
+              <label>银行卡里的第三方支付
+                <select value={channelFilter} onChange={(e) => applyFilter(payFilter, e.target.value)}>
+                  <option value="">全部（{rows.filter((row) => !row.skipReason).length} 笔）</option>
+                  <option value="none">只留纯银行卡，排除微信/支付宝/京东（{channelCounts.none} 笔）</option>
+                  {THIRD_PARTY_CHANNELS.map(([key, label]) => (
+                    <option key={key} value={key}>只看{label}（{channelCounts[key]} 笔）</option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {(payFilter || channelFilter) && (
               <>
                 <span className="muted">已选出 {shownRows.filter((item) => !item.row.skipReason).length} 笔</span>
-                <button className="secondary" type="button" onClick={() => applyPayFilter('')}>恢复全选</button>
+                <button className="secondary" type="button" onClick={() => applyFilter('', '')}>恢复全选</button>
               </>
             )}
           </div>
