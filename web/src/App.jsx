@@ -1966,7 +1966,10 @@ function ImportPage() {
       if (file.needsMapping) nextPending.push({ ...file, file: uploaded[index] });
       else nextParsed.push(file);
     });
-    const merged = replacePending ? nextParsed : [...parsed, ...nextParsed];
+    // 按文件名排序展示，中文名用拼音序比较，多文件时更好找
+    const merged = (replacePending ? nextParsed : [...parsed, ...nextParsed])
+      .slice()
+      .sort((a, b) => String(a.filename || '').localeCompare(String(b.filename || ''), 'zh-CN'));
     const queued = replacePending ? nextPending : [...pending.slice(1), ...nextPending];
     setParsed(merged);
     setPending(queued);
