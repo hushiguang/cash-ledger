@@ -822,6 +822,7 @@ h2 .tx-flag { margin-left: 8px; vertical-align: 2px; }
   box-shadow: 0 24px 60px rgba(28, 20, 40, 0.22);
 }
 .modal.modal-wide { width: min(860px, 100%); }
+.modal.modal-detail { width: min(640px, 100%); }
 .modal-amount {
   margin: 6px 0 16px;
   font-family: "Source Serif 4", serif;
@@ -829,9 +830,9 @@ h2 .tx-flag { margin-left: 8px; vertical-align: 2px; }
   font-variant-numeric: tabular-nums;
 }
 .detail-grid { display: grid; gap: 10px; margin: 0; }
-.detail-grid div { display: grid; grid-template-columns: 52px 1fr; gap: 12px; }
+.detail-grid div { display: grid; grid-template-columns: 64px 1fr; gap: 12px; }
 .detail-grid dt { color: var(--muted); }
-.detail-grid dd { margin: 0; }
+.detail-grid dd { margin: 0; white-space: pre-wrap; overflow-wrap: break-word; word-break: break-word; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 
 .dup-pair { display: grid; gap: 12px; }

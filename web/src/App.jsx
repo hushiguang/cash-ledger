@@ -779,7 +779,7 @@ function BillDetail({ tx, onClose, onDelete, onSave }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
-        className={`modal ${editing ? 'modal-wide' : ''}`}
+        className={`modal ${editing ? 'modal-wide' : 'modal-detail'}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="bill-title"
