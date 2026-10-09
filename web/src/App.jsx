@@ -2522,7 +2522,9 @@ function CategoriesPage() {
     <>
       <div className="page-head">
         <h1>分类</h1>
-        <button className="secondary" type="button" onClick={() => { setAdding({ parentId: null }); setName(''); }}>新增一级分类</button>
+        {kind !== 'rules' && (
+          <button className="secondary" type="button" onClick={() => { setAdding({ parentId: null }); setName(''); }}>新增一级分类</button>
+        )}
         {duplicateNames.length > 0 && (
           <button className="secondary" type="button" onClick={mergeDuplicates}>合并 {duplicateNames.length} 个重名分类</button>
         )}
@@ -2531,7 +2533,7 @@ function CategoriesPage() {
       {notice && <p className="muted" style={{ marginBottom: 12 }}>{notice}</p>}
       <div className="split">
         <nav className="side-tabs">
-          {[['expense', '支出'], ['income', '收入']].map(([value, label]) => (
+          {[['expense', '支出'], ['income', '收入'], ['rules', '自动分类']].map(([value, label]) => (
             <button
               key={value}
               type="button"
@@ -2543,6 +2545,43 @@ function CategoriesPage() {
           ))}
         </nav>
         <section className="card">
+          {kind === 'rules' ? (
+            <>
+              <div className="tree-head">
+                <h2>自动分类规则</h2>
+              </div>
+              <p className="muted">账单的「对方」或「备注」里含关键词，就自动归到指定分类。导入新账单时立刻生效；加规则时也会立刻补一遍已有账单。同一个账单命中多条时，取关键词最长的那条。</p>
+              <div className="cat-chips" style={{ marginTop: 10 }}>
+                {rules.length === 0 && <span className="muted">还没有规则。比如「美团 → 餐饮」。</span>}
+                {rules.map((rule) => (
+                  <span className="cat-chip" key={rule.id}>
+                    <b>{rule.keyword}</b>
+                    <span className="muted">→ {rule.categoryName}</span>
+                    <button type="button" className="chip-btn danger" title="删除" onClick={() => removeRule(rule)}>✕</button>
+                  </span>
+                ))}
+              </div>
+              <form className="cat-edit" onSubmit={addRule} style={{ marginTop: 12 }}>
+                <input value={ruleKeyword} onChange={(e) => setRuleKeyword(e.target.value)} placeholder="关键词，如 美团" required />
+                <select value={ruleCategoryId} onChange={(e) => setRuleCategoryId(e.target.value)} required>
+                  <option value="">归到哪个分类</option>
+                  {[['expense', '支出'], ['income', '收入']].map(([value, label]) => (
+                    <optgroup key={value} label={label}>
+                      {categories.filter((c) => !c.archived && c.kind === value).map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+                <button className="primary small" type="submit" disabled={!ruleKeyword.trim() || !ruleCategoryId}>添加规则</button>
+                <span className="spacer" />
+                <button className="secondary small" type="button" disabled={applying || !rules.length} onClick={applyRules}>
+                  {applying ? '检查中…' : '套用到未分类账单'}
+                </button>
+              </form>
+            </>
+          ) : (
+            <>
           <div className="tree-head">
             <h2>{kind === 'expense' ? '支出分类' : '收入分类'}</h2>
             <button className="secondary small" type="button" onClick={() => { setAdding({ parentId: null }); setName(''); }}>新增一级分类</button>
@@ -2625,42 +2664,10 @@ function CategoriesPage() {
             </div>
           )}
           <p className="muted" style={{ marginTop: 12 }}>导入的分类会按内置对照表落到这套分类上，认不出来的进「其他」。</p>
+            </>
+          )}
         </section>
       </div>
-      <section className="card" style={{ marginTop: 12 }}>
-        <div className="tree-head">
-          <h2>自动分类规则</h2>
-        </div>
-        <p className="muted">账单的「对方」或「备注」里含关键词，就自动归到指定分类。导入新账单时立刻生效；也可以一键套到已有账单上。同一个账单命中多条规则时，取关键词最长的那条。</p>
-        <div className="cat-chips" style={{ marginTop: 8 }}>
-          {rules.length === 0 && <span className="muted">还没有规则。比如「美团 → 餐饮」。</span>}
-          {rules.map((rule) => (
-            <span className="cat-chip" key={rule.id}>
-              <b>{rule.keyword}</b>
-              <span className="muted">→ {rule.categoryName}</span>
-              <button type="button" className="chip-btn danger" title="删除" onClick={() => removeRule(rule)}>✕</button>
-            </span>
-          ))}
-        </div>
-        <form className="cat-edit" onSubmit={addRule} style={{ marginTop: 10 }}>
-          <input value={ruleKeyword} onChange={(e) => setRuleKeyword(e.target.value)} placeholder="关键词，如 美团" required />
-          <select value={ruleCategoryId} onChange={(e) => setRuleCategoryId(e.target.value)} required>
-            <option value="">归到哪个分类</option>
-            {[['expense', '支出'], ['income', '收入']].map(([value, label]) => (
-              <optgroup key={value} label={label}>
-                {categories.filter((c) => !c.archived && c.kind === value).map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
-          <button className="primary small" type="submit" disabled={!ruleKeyword.trim() || !ruleCategoryId}>添加规则</button>
-          <span className="spacer" />
-          <button className="secondary small" type="button" disabled={applying || !rules.length} onClick={applyRules}>
-            {applying ? '检查中…' : '套用到未分类账单'}
-          </button>
-        </form>
-      </section>
       {confirm && (
         <ConfirmModal
           title={confirm.title || `确定${confirm.label}「${confirm.item.name}」？`}
