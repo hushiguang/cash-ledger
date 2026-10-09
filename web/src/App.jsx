@@ -2044,9 +2044,13 @@ function ImportPage() {
       if (file.needsMapping) nextPending.push({ ...file, file: uploaded[index] });
       else nextParsed.push(file);
     });
-    // 按文件名排序展示，中文名用拼音序比较，多文件时更好找
+    // 文件之间按文件名排（中文按拼音序）；每个文件内部按时间由近到远，
+    // 账单文件原始顺序是从最早开始，翻起来不方便
     const merged = (replacePending ? nextParsed : [...parsed, ...nextParsed])
-      .slice()
+      .map((file) => ({
+        ...file,
+        rows: (file.rows || []).slice().sort((a, b) => String(b.occurredAt || '').localeCompare(String(a.occurredAt || ''))),
+      }))
       .sort((a, b) => String(a.filename || '').localeCompare(String(b.filename || ''), 'zh-CN'));
     const queued = replacePending ? nextPending : [...pending.slice(1), ...nextPending];
     setParsed(merged);
