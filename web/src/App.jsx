@@ -2435,8 +2435,10 @@ function CategoriesPage() {
     setError('');
     setNotice('');
     api('/api/category-rules', { method: 'POST', body: { keyword, categoryId: Number(ruleCategoryId) } })
-      .then(() => { setRuleKeyword(''); return reloadRules(); })
-      .then(() => setNotice(`已添加规则：对方或备注含「${keyword}」→ 指定分类`))
+      .then((result) => { setRuleKeyword(''); return reloadRules().then(() => result); })
+      .then((result) => setNotice(result.updated
+        ? `已添加规则：含「${keyword}」→ 指定分类，并归类了 ${result.updated} 笔未分类账单`
+        : `已添加规则：含「${keyword}」→ 指定分类（现有未分类账单里没有命中的）`))
       .catch((err) => setError(err.message));
   }
 
@@ -2652,7 +2654,7 @@ function CategoriesPage() {
               </optgroup>
             ))}
           </select>
-          <button className="primary small" type="submit">添加规则</button>
+          <button className="primary small" type="submit" disabled={!ruleKeyword.trim() || !ruleCategoryId}>添加规则</button>
           <span className="spacer" />
           <button className="secondary small" type="button" disabled={applying || !rules.length} onClick={applyRules}>
             {applying ? '检查中…' : '套用到未分类账单'}

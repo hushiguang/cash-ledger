@@ -1442,6 +1442,31 @@ app.get('/api/category-rules', authRequired, (req, res) => {
   res.json({ rules: loadCategoryRules(req.user.id) });
 });
 
+// 把规则补到还没有分类的账单上，返回归类了多少笔
+function applyRulesToUncategorized(userId) {
+  const rules = loadCategoryRules(userId);
+  if (!rules.length) return 0;
+  const rows = db.prepare(
+    'SELECT id, payee, note FROM transactions WHERE user_id = ? AND category_id IS NULL',
+  ).all(userId);
+  const update = db.prepare('UPDATE transactions SET category_id = ? WHERE id = ?');
+  let updated = 0;
+  db.exec('BEGIN');
+  try {
+    for (const row of rows) {
+      const rule = matchCategoryRule(rules, row);
+      if (!rule) continue;
+      update.run(rule.categoryId, row.id);
+      updated += 1;
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  return updated;
+}
+
 app.post('/api/category-rules', authRequired, wrap((req, res) => {
   const keyword = String(req.body.keyword || '').trim();
   if (!keyword) return fail(res, 400, '请填写关键词');
@@ -1451,7 +1476,9 @@ app.post('/api/category-rules', authRequired, wrap((req, res) => {
     INSERT INTO category_rules (user_id, keyword, category_id, created_at) VALUES (?, ?, ?, ?)
     ON CONFLICT (user_id, keyword) DO UPDATE SET category_id = excluded.category_id
   `).run(req.user.id, keyword, category.id, new Date().toISOString());
-  res.json({ ok: true });
+  // 加了规则就立刻补一遍，不用再去点「套用」
+  const updated = applyRulesToUncategorized(req.user.id);
+  res.json({ ok: true, updated });
 }));
 
 app.delete('/api/category-rules/:id', authRequired, wrap((req, res) => {
