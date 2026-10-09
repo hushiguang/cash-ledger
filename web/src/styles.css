@@ -671,6 +671,17 @@ tbody tr:last-child td { border-bottom: 0; }
 .search-row .amount-range { display: inline-flex; align-items: center; gap: 6px; }
 .search-row .amount-range input { width: 92px; }
 .query-count { margin: 10px 4px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* 筛选后的金额合计 */
+.bill-summary { display: inline-flex; align-items: baseline; gap: 6px; }
+/* 批量改分类：勾选后工具条常驻在列表上方 */
+.bill-bulk {
+  position: sticky; top: 8px; z-index: 2;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 12px; margin-bottom: 8px;
+}
+.bill-bulk .spacer { flex: 1; }
+.tx-pick { flex: none; display: flex; align-items: center; padding-left: 4px; }
+.tx-pick input { width: 16px; height: 16px; accent-color: var(--violet); cursor: pointer; }
 .load-more { display: flex; justify-content: center; padding: 14px 0 4px; }
 .book-card {
   margin-bottom: 14px;

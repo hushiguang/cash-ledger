@@ -1369,6 +1369,13 @@ function Bills() {
   const [pendingDelete, setPendingDelete] = useState(null);
   const [exporting, setExporting] = useState('');
   const [clearing, setClearing] = useState(false);
+  const [notice, setNotice] = useState('');
+  // 批量改分类：勾选账单后统一设置，picked 是 id → true
+  const [picked, setPicked] = useState({});
+  const [bulkCategory, setBulkCategory] = useState('');
+  const [bulkBusy, setBulkBusy] = useState(false);
+  // 当前筛选条件下的金额合计（后端按全部匹配项统计，不只是已加载的）
+  const [summary, setSummary] = useState(null);
   const bookId = activeBookId || '';
   function queryString(overrides) {
     const params = new URLSearchParams();
@@ -1398,9 +1405,38 @@ function Bills() {
     // 换筛选条件时从头开始；「加载更多」才追加
     const next = append ? { ...overrides } : { offset: 0, ...overrides };
     if (!append) setOffset(0);
+    setNotice('');
     const data = await api(`/api/transactions${queryString(next)}`);
     setRows((prev) => (append ? [...prev, ...data.transactions] : data.transactions));
     setTotal(data.total ?? data.transactions.length);
+    setSummary(data.summary || null);
+    if (!append) setPicked({});
+  }
+
+  const pickedIds = Object.keys(picked).filter((id) => picked[id]).map(Number);
+  const shownIds = rows.map((row) => row.id).filter((id) => picked[id]);
+  function togglePick(id) {
+    setPicked((prev) => ({ ...prev, [id]: !prev[id] }));
+  }
+  // 批量改分类：空分类表示清成未分类
+  async function applyBulkCategory(nextCategoryId) {
+    const ids = pickedIds;
+    if (!ids.length) return;
+    setBulkBusy(true);
+    setError('');
+    try {
+      const result = await api('/api/transactions/category', {
+        method: 'PATCH',
+        body: { ids, categoryId: nextCategoryId ? Number(nextCategoryId) : null },
+      });
+      setPicked({});
+      await load();
+      setNotice(`已改 ${result.updated} 笔的分类`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBulkBusy(false);
+    }
   }
   async function loadMore() {
     const next = rows.length;
@@ -1551,7 +1587,46 @@ function Bills() {
             ? `共 ${total} 笔，已显示 ${rows.length} 笔`
             : `共 ${total} 笔${rows.length ? '（全部）' : ''}`}
         </span>
+        {summary && (
+          <span className="bill-summary">
+            支出 ¥{money(summary.expense)}
+            <span className="muted">·</span>
+            收入 ¥{money(summary.income)}
+            <span className="muted">·</span>
+            净额 <b className={`tx-amount ${Number(summary.net) < 0 ? 'expense' : 'income'}`}>¥{money(summary.net, true)}</b>
+          </span>
+        )}
+        {notice && <span className="bill-summary">{notice}</span>}
       </div>
+      {shownIds.length > 0 && (
+        <div className="card bill-bulk">
+          <span>已选 <b>{shownIds.length}</b> 笔</span>
+          <select value={bulkCategory} onChange={(e) => setBulkCategory(e.target.value)}>
+            <option value="">改到哪个分类…</option>
+            <option value="__none__">清除分类（设为未分类）</option>
+            {[['expense', '支出'], ['income', '收入']].map(([value, label]) => (
+              <optgroup key={value} label={label}>
+                {categories.filter((c) => !c.archived && c.kind === value).map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+          <button
+            className="primary small"
+            type="button"
+            disabled={bulkBusy || !bulkCategory}
+            onClick={() => applyBulkCategory(bulkCategory === '__none__' ? '' : bulkCategory)}
+          >
+            {bulkBusy ? '处理中…' : '应用'}
+          </button>
+          <button className="ghost small" type="button" onClick={() => setPicked({})}>取消选择</button>
+          <span className="spacer" />
+          <button className="ghost small" type="button" onClick={() => setPicked(Object.fromEntries(rows.map((row) => [row.id, true])))}>
+            全选已加载的 {rows.length} 笔
+          </button>
+        </div>
+      )}
       <div className="card ledger">
         {groups.map((group) => (
           <section key={group.day}>
@@ -1563,6 +1638,9 @@ function Bills() {
               const flag = billFlag(tx);
               return (
               <div className="tx-line" key={tx.id}>
+                <label className="tx-pick" onClick={(e) => e.stopPropagation()}>
+                  <input type="checkbox" checked={!!picked[tx.id]} onChange={() => togglePick(tx.id)} />
+                </label>
                 <button className="tx-row" type="button" onClick={() => setSelected(tx)}>
                   <span className={`tx-mark ${tx.type}`}>{typeLabel(tx.type).slice(0, 1)}</span>
                   <span className="tx-main">

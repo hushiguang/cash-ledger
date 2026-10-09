@@ -815,10 +815,14 @@ function transactionRows(user, query, limit, offset) {
   return db.prepare(sql).all(...params);
 }
 
+// 按当前筛选条件统计笔数和金额。金额只算支出和收入，转账是资金搬家不计入
 function transactionTotal(user, query) {
   const { where, params } = transactionWhere(user, query);
   const row = db.prepare(`
-    SELECT COUNT(*) AS n
+    SELECT
+      COUNT(*) AS n,
+      COALESCE(SUM(CASE WHEN t.type = 'expense' THEN t.amount_cents END), 0) AS expense,
+      COALESCE(SUM(CASE WHEN t.type = 'income' THEN t.amount_cents END), 0) AS income
     FROM transactions t
     LEFT JOIN categories c ON c.id = t.category_id
     LEFT JOIN categories p ON p.id = c.parent_id
@@ -826,7 +830,7 @@ function transactionTotal(user, query) {
     LEFT JOIN accounts b ON b.id = t.to_account_id
     WHERE ${where.join(' AND ')}
   `).get(...params);
-  return row.n;
+  return { count: row.n, expenseCents: row.expense, incomeCents: row.income };
 }
 
 function attachmentName(filename) {
@@ -838,9 +842,17 @@ app.get('/api/transactions', authRequired, (req, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 500, 1), 5000);
   const offset = Math.max(Number(req.query.offset) || 0, 0);
   const rows = transactionRows(req.user, req.query, limit, offset);
-  const total = transactionTotal(req.user, req.query);
+  const totals = transactionTotal(req.user, req.query);
   const images = transactionImages(rows.map((row) => row.id));
-  res.json({ transactions: rows.map((row) => presentTransaction(row, images.get(row.id) || [])), total });
+  res.json({
+    transactions: rows.map((row) => presentTransaction(row, images.get(row.id) || [])),
+    total: totals.count,
+    summary: {
+      expense: centsToYuan(totals.expenseCents),
+      income: centsToYuan(totals.incomeCents),
+      net: centsToYuan(totals.incomeCents - totals.expenseCents),
+    },
+  });
 });
 
 app.get('/api/export', authRequired, (req, res) => {
@@ -862,6 +874,30 @@ app.post('/api/transactions', authRequired, wrap((req, res) => {
   const info = insertTransaction(req.user, req.body);
   const row = db.prepare(`${selectTransactions()} WHERE t.id = ?`).get(Number(info.lastInsertRowid));
   res.json({ transaction: presentWithImages(row) });
+}));
+
+// 批量改分类。要放在 /api/transactions/:id 前面，否则会被当成 id=category 的单条接口
+app.patch('/api/transactions/category', authRequired, wrap((req, res) => {
+  const ids = (Array.isArray(req.body.ids) ? req.body.ids : []).map(Number).filter((n) => Number.isFinite(n) && n > 0);
+  if (!ids.length) return fail(res, 400, '请先勾选账单');
+  const marks = ids.map(() => '?').join(',');
+  const categoryId = req.body.categoryId ? Number(req.body.categoryId) : null;
+  let info;
+  if (categoryId) {
+    // 只改和分类同收支方向的账单：支出分类不会挂到收入上
+    const category = categoryOwned(req.user.id, categoryId);
+    if (!category) return fail(res, 400, '分类不存在');
+    info = db.prepare(`
+      UPDATE transactions SET category_id = ?
+      WHERE user_id = ? AND type = ? AND id IN (${marks})
+    `).run(category.id, req.user.id, category.kind, ...ids);
+  } else {
+    info = db.prepare(`
+      UPDATE transactions SET category_id = NULL
+      WHERE user_id = ? AND type IN ('expense', 'income') AND id IN (${marks})
+    `).run(req.user.id, ...ids);
+  }
+  res.json({ updated: info.changes });
 }));
 
 app.patch('/api/transactions/:id', authRequired, wrap((req, res) => {
@@ -904,7 +940,7 @@ app.patch('/api/transactions/:id', authRequired, wrap((req, res) => {
 }));
 
 app.get('/api/transactions/count', authRequired, wrap((req, res) => {
-  res.json({ count: transactionTotal(req.user, req.query) });
+  res.json({ count: transactionTotal(req.user, req.query).count });
 }));
 
 app.delete('/api/transactions', authRequired, wrap((req, res) => {
