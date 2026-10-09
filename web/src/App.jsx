@@ -1738,6 +1738,10 @@ const MAP_FIELDS = [
   ['externalId', '单号'],
 ];
 
+// 导入预览里「只留银行卡渠道」的快捷筛选项，以及判断账户名是不是银行卡
+const BANK_CHANNEL = '__bank__';
+const BANK_CHANNEL_RE = /银行|信用卡|储蓄卡|借记卡|贷记卡/;
+
 const IMPORT_SOURCES = {
   wechat: '微信',
   alipay: '支付宝',
@@ -1872,12 +1876,41 @@ function ImportPage() {
   const [committing, setCommitting] = useState(false);
   const [previewNew, setPreviewNew] = useState(null);
   const [page, setPage] = useState(0);
+  // 导入前先按「支付方式」筛一遍：微信/支付宝/京东账单里只有一部分是走银行卡付的，
+  // 只想留这部分时在这里选，列表只显示并只勾选它。
+  const [payFilter, setPayFilter] = useState('');
   const rows = parsed.flatMap((file) => file.rows || []);
   const readyCount = rows.filter((row, index) => picked[index] && !row.skipReason).length;
   const pageSize = 80;
-  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+  // 本次文件里出现过的支付方式，按笔数从多到少排
+  const payOptions = (() => {
+    const map = new Map();
+    for (const row of rows) {
+      if (row.skipReason) continue;
+      const key = row.accountName || '—';
+      map.set(key, (map.get(key) || 0) + 1);
+    }
+    return [...map.entries()].map(([name, count]) => ({ name, count })).sort((x, y) => y.count - x.count);
+  })();
+  const bankCount = rows.filter((row) => !row.skipReason && BANK_CHANNEL_RE.test(row.accountName || '')).length;
+  function matchesPay(row, value) {
+    if (!value) return true;
+    if (value === BANK_CHANNEL) return BANK_CHANNEL_RE.test(row.accountName || '');
+    return (row.accountName || '—') === value;
+  }
+  function applyPayFilter(value) {
+    setPayFilter(value);
+    const next = {};
+    rows.forEach((row, index) => { next[index] = !row.skipReason && matchesPay(row, value); });
+    setPicked(next);
+    setPage(0);
+  }
+  const shownRows = [];
+  rows.forEach((row, index) => { if (matchesPay(row, payFilter)) shownRows.push({ row, index }); });
+  const pageCount = Math.max(1, Math.ceil(shownRows.length / pageSize));
   const pageStart = Math.min(page, pageCount - 1) * pageSize;
-  const visibleRows = rows.slice(pageStart, pageStart + pageSize);
+  const visibleRows = shownRows.slice(pageStart, pageStart + pageSize).map((item) => item.row);
+  const visibleIndexes = shownRows.slice(pageStart, pageStart + pageSize).map((item) => item.index);
   const batchStats = useMemo(
     () => importBatchStats(rows, picked, books.accounts, books.categories, previewNew),
     [rows, picked, books.accounts, books.categories, previewNew],
@@ -1902,6 +1935,7 @@ function ImportPage() {
     setMapping(queued[0]?.suggested || {});
     const flat = merged.flatMap((file) => file.rows || []);
     setPicked(Object.fromEntries(flat.map((row, index) => [index, !row.skipReason])));
+    setPayFilter('');
     setPage(0);
   }
 
@@ -2018,12 +2052,29 @@ function ImportPage() {
               </div>
             ))}
           </div>
+          <div className="search-row" style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap', margin: '8px 0' }}>
+            <label>只导入支付方式
+              <select value={payFilter} onChange={(e) => applyPayFilter(e.target.value)}>
+                <option value="">全部（{rows.filter((row) => !row.skipReason).length} 笔）</option>
+                {bankCount > 0 && <option value={BANK_CHANNEL}>银行卡渠道（{bankCount} 笔）</option>}
+                {payOptions.map((item) => (
+                  <option key={item.name} value={item.name}>{item.name}（{item.count} 笔）</option>
+                ))}
+              </select>
+            </label>
+            {payFilter && (
+              <>
+                <span className="muted">已选出 {shownRows.filter((item) => !item.row.skipReason).length} 笔</span>
+                <button className="secondary" type="button" onClick={() => applyPayFilter('')}>恢复全选</button>
+              </>
+            )}
+          </div>
           <div className="preview">
             <table>
-              <thead><tr><th></th><th>文件</th><th>时间</th><th>类型</th><th>金额</th><th>对方</th><th>账户</th><th>说明</th></tr></thead>
+              <thead><tr><th></th><th>文件</th><th>时间</th><th>类型</th><th>金额</th><th>对方</th><th>支付方式</th><th>说明</th></tr></thead>
               <tbody>
                 {visibleRows.map((row, index) => {
-                  const rowIndex = pageStart + index;
+                  const rowIndex = visibleIndexes[index];
                   return (
                     <tr key={`${row.filename}-${rowIndex}`}>
                       <td><input type="checkbox" disabled={!!row.skipReason} checked={!!picked[rowIndex]} onChange={(e) => setPicked({ ...picked, [rowIndex]: e.target.checked })} /></td>
@@ -2040,7 +2091,7 @@ function ImportPage() {
               </tbody>
             </table>
           </div>
-          {rows.length > pageSize && (
+          {shownRows.length > pageSize && (
             <div className="row pager">
               <button className="secondary" type="button" disabled={pageStart === 0} onClick={() => setPage((current) => Math.max(0, current - 1))}>上一页</button>
               <span className="muted">{pageStart + 1}–{Math.min(pageStart + pageSize, rows.length)} / {rows.length}</span>
