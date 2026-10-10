@@ -1244,9 +1244,12 @@ app.get('/api/summary', authRequired, (req, res) => {
   const scope = bookScope(req.user, req.query);
   const scopeSql = scope.sql;
   const scopeParams = scope.params;
-  const firstDate = db.prepare(`
-    SELECT MIN(occurred_at) AS first FROM transactions t WHERE ${scopeSql}
-  `).get(...scopeParams)?.first || null;
+  // 最早/最晚一笔流水，前端选「全部」时直接拿它当区间，不再按月取整
+  const bounds = db.prepare(`
+    SELECT MIN(occurred_at) AS first, MAX(occurred_at) AS last FROM transactions t WHERE ${scopeSql}
+  `).get(...scopeParams) || {};
+  const firstDate = bounds.first ? String(bounds.first).slice(0, 10) : null;
+  const lastDate = bounds.last ? String(bounds.last).slice(0, 10) : null;
   const totals = db.prepare(`
     SELECT
       COALESCE(SUM(CASE WHEN type = 'income' THEN amount_cents END), 0) AS income,
@@ -1311,8 +1314,9 @@ app.get('/api/summary', authRequired, (req, res) => {
     month,
     start,
     end,
-    // 最早一笔流水的日期，前端选「全部」时用它当起点
-    firstDate: firstDate ? String(firstDate).slice(0, 10) : null,
+    // 最早/最晚一笔流水的日期，前端选「全部」时用它当区间
+    firstDate,
+    lastDate,
     income: centsToYuan(totals.income),
     expense: centsToYuan(totals.expense),
     net: centsToYuan(totals.income - totals.expense),

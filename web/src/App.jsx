@@ -106,12 +106,32 @@ function useRefresh() {
   return useContext(RefreshContext);
 }
 
+// 弹窗打开时锁住背景滚动：不锁的话滚轮会带着后面的页面一起动
+function useScrollLock(active) {
+  useEffect(() => {
+    if (!active) return undefined;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = previous; };
+  }, [active]);
+}
+
 function CreateBillModal({ open, onClose, onSaved }) {
   const books = useBooks();
+  useScrollLock(open);
   const [form, setForm] = useState(emptyBill);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const shared = !!books.currentBook && books.currentBook.kind !== 'personal';
+  useEffect(() => {
+    if (!open) return undefined;
+    function onKey(event) {
+      // Esc 关掉弹窗；正在保存时不打断，免得请求还在跑弹窗先没了
+      if (event.key === 'Escape' && !saving) onClose();
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open, saving, onClose]);
   if (!open) return null;
 
   async function submit(event) {
@@ -142,7 +162,7 @@ function CreateBillModal({ open, onClose, onSaved }) {
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <form className="modal modal-wide stack" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()} onSubmit={submit}>
+      <form className="modal modal-wide modal-grow stack" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()} onSubmit={submit}>
         <h2>记一笔{books.currentBook ? ` · ${books.currentBook.name}` : ''}</h2>
         {error && <div className="error">{error}</div>}
         {shared ? (
@@ -205,8 +225,10 @@ function stringToColor(str) {
 }
 
 function BookSwitch({ books, currentBookId, onChange }) {
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
+  useScrollLock(open);
   useEffect(() => {
     if (!open) return undefined;
     function onKey(e) { if (e.key === 'Escape') setOpen(false); }
@@ -228,19 +250,24 @@ function BookSwitch({ books, currentBookId, onChange }) {
         <span className="book-caret">▾</span>
       </button>
       {open && (
-        <>
-          <div className="book-backdrop" onClick={() => setOpen(false)} />
-          <div className="book-menu">
-            <div className="book-menu-head">
-              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索账本…" autoFocus />
-            </div>
-            <div className="book-menu-list">
+        <div className="modal-backdrop" onClick={() => setOpen(false)}>
+          <div
+            className="modal book-switch-modal stack"
+            role="dialog"
+            aria-modal="true"
+            aria-label="切换账本"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2>切换账本</h2>
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索账本…" autoFocus />
+            <div className="book-switch-list">
               {filtered.map((book) => (
                 <button
                   key={book.id}
                   type="button"
-                  className={book.id === currentBookId ? 'active' : ''}
-                  onClick={() => { onChange(book.id); setOpen(false); }}
+                  className={`book-switch-item${book.id === currentBookId ? ' active' : ''}`}
+                  // 换完账本就关掉弹窗，并回到总览：留在原页面的话，看到的是新账本下的旧筛选
+                  onClick={() => { onChange(book.id); setOpen(false); navigate('/'); }}
                 >
                   <span className="book-avatar" style={{ background: stringToColor(book.name) }}>{book.name.slice(0, 1)}</span>
                   <span className="book-meta">
@@ -251,14 +278,17 @@ function BookSwitch({ books, currentBookId, onChange }) {
                       {book.archived ? ' · 已归档' : ''}
                     </span>
                   </span>
-                  {book.id === currentBookId && <span className="book-check">✓</span>}
+                  {book.id === currentBookId ? <span className="book-check">✓</span> : <span className="tiny muted">切换</span>}
                 </button>
               ))}
-              {!filtered.length && <p className="muted" style={{ padding: '10px 8px' }}>没有匹配的账本</p>}
+              {!filtered.length && <p className="muted">没有匹配的账本</p>}
             </div>
-            <NavLink className="book-manage" to="/books" onClick={() => setOpen(false)}>管理账本…</NavLink>
+            <div className="modal-actions">
+              <NavLink className="ghost small" to="/books" onClick={() => setOpen(false)}>管理账本</NavLink>
+              <button className="secondary" type="button" onClick={() => setOpen(false)}>关闭</button>
+            </div>
           </div>
-        </>
+        </div>
       )}
     </div>
   );
@@ -275,7 +305,6 @@ function Shell({ user, onLogout, onSaved, children }) {
         <aside className="sidebar">
           <div className="brand">轻账单<span className="brand-sub">LEDGER</span></div>
           <BookSwitch books={bookList} currentBookId={currentBookId} onChange={setCurrentBookId} />
-          <button className="primary new-bill" type="button" onClick={() => setCreating(true)}>＋ 记一笔</button>
           <nav className="sidenav">
             {groups.map((group) => (
               <div className="nav-group" key={group.title}>
@@ -300,7 +329,9 @@ function Shell({ user, onLogout, onSaved, children }) {
           </div>
         </aside>
         <main className="main">{children}</main>
-        <button className="fab" type="button" title="记一笔" aria-label="记一笔" onClick={() => setCreating(true)}>+</button>
+        <button className="fab" type="button" title="记一笔" aria-label="记一笔" onClick={() => setCreating(true)}>
+          <span className="fab-plus">+</span>
+        </button>
         <CreateBillModal open={creating} onClose={() => setCreating(false)} onSaved={onSaved} />
       </div>
     </BooksContext.Provider>
@@ -715,6 +746,7 @@ function saveFile(blob, filename) {
 }
 
 function ClearBills({ onClose, onCleared, currentBook, bookId, bookQuery }) {
+  useScrollLock(true);
   const [text, setText] = useState('');
   const [count, setCount] = useState(null);
   const [error, setError] = useState('');
@@ -776,6 +808,7 @@ function ClearBills({ onClose, onCleared, currentBook, bookId, bookQuery }) {
 
 function BillDetail({ tx, onClose, onDelete, onSave }) {
   const books = useBooks();
+  useScrollLock(true);
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState(null);
   const [error, setError] = useState('');
@@ -947,25 +980,19 @@ function localDate(d) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
-function parseLocalDate(text) {
-  const s = String(text || '').slice(0, 10);
-  return new Date(Number(s.slice(0, 4)), Number(s.slice(5, 7)) - 1, Number(s.slice(8, 10)));
-}
-
-// 总览页所有数据共用一个时间区间：以光标所在月为末尾，往前推相应月数
-function rangeWindow(cursor, range, firstDate, custom) {
+// 总览页所有数据共用一个时间区间：以光标所在月为末尾，往前推相应月数。
+// 「全部」不按月取整，直接用第一笔到最后一笔的日期，否则会一直显示到本月底
+function rangeWindow(cursor, range, firstDate, lastDate, custom) {
   if (range === 'custom' && custom?.from && custom?.to) {
     return { from: custom.from, to: custom.to, label: `${custom.from} ~ ${custom.to}` };
   }
-  const to = localDate(new Date(cursor.year, cursor.month, 0));
-  let start;
   if (range === 'all') {
-    const base = firstDate ? parseLocalDate(firstDate) : new Date(cursor.year, cursor.month - 1, 1);
-    start = new Date(base.getFullYear(), base.getMonth(), 1);
-  } else {
-    start = new Date(cursor.year, cursor.month - (RANGE_MONTHS[range] || 1), 1);
+    const from = firstDate || localDate(new Date(cursor.year, cursor.month - 1, 1));
+    const to = lastDate || localDate(new Date(cursor.year, cursor.month, 0));
+    return { from, to: to < from ? from : to, label: `${from} ~ ${to}` };
   }
-  const from = localDate(start);
+  const to = localDate(new Date(cursor.year, cursor.month, 0));
+  const from = localDate(new Date(cursor.year, cursor.month - (RANGE_MONTHS[range] || 1), 1));
   return { from, to, label: range === 'month' ? `${cursor.year} 年 ${cursor.month} 月` : `${from} ~ ${to}` };
 }
 
@@ -1165,7 +1192,10 @@ function Overview() {
   const monthStart = useMemo(() => localDate(new Date(now.getFullYear(), now.getMonth(), 1)), []);
   const monthEnd = useMemo(() => localDate(new Date(now.getFullYear(), now.getMonth() + 1, 0)), []);
   const [custom, setCustom] = useState({ from: monthStart, to: monthEnd });
-  const win = useMemo(() => rangeWindow(cursor, range, summary?.firstDate, custom), [cursor, range, summary?.firstDate, custom]);
+  const win = useMemo(
+    () => rangeWindow(cursor, range, summary?.firstDate, summary?.lastDate, custom),
+    [cursor, range, summary?.firstDate, summary?.lastDate, custom],
+  );
   useEffect(() => {
     api(`/api/summary?from=${win.from}&to=${win.to}&${bookQuery}`).then(setSummary);
     api(`/api/transactions?from=${win.from}&to=${win.to}&${bookQuery}`).then((data) => setRecent(data.transactions.slice(0, 8)));
@@ -1655,6 +1685,8 @@ function Bills() {
   // 批量改分类：勾选账单后统一设置，picked 是 id → true
   const [picked, setPicked] = useState({});
   const [bulkCategory, setBulkCategory] = useState('');
+  const [bulkCatQuery, setBulkCatQuery] = useState('');
+  const [bulkCatOpen, setBulkCatOpen] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
   // 当前筛选条件下的金额合计（后端按全部匹配项统计，不只是已加载的）
   const [summary, setSummary] = useState(null);
@@ -1700,6 +1732,25 @@ function Bills() {
   function togglePick(id) {
     setPicked((prev) => ({ ...prev, [id]: !prev[id] }));
   }
+  // 批量改分类的候选：分类多了靠搜，父分类名也算关键字（搜「餐饮」能出「餐饮 / 午饭」）
+  const bulkCatOptions = [
+    { id: '__none__', name: '清除分类', parentName: '', kind: '' },
+    ...categories.filter((c) => !c.archived).map((c) => {
+      const parent = c.parentId ? categories.find((p) => p.id === c.parentId) : null;
+      return { id: String(c.id), name: c.name, parentName: parent ? parent.name : '', kind: c.kind };
+    }),
+  ];
+  const bulkKeyword = bulkCatQuery.trim().toLowerCase();
+  const bulkMatches = bulkKeyword
+    ? bulkCatOptions.filter((c) => `${c.parentName}${c.name}`.toLowerCase().includes(bulkKeyword))
+    : bulkCatOptions;
+  // 点了候选就锁住；只输关键字没点，回车/点应用就取第一个匹配
+  const bulkTarget = bulkCategory || (bulkKeyword ? bulkMatches[0]?.id || '' : '');
+  function pickBulkCategory(option) {
+    setBulkCategory(option.id);
+    setBulkCatQuery(option.parentName ? `${option.parentName} / ${option.name}` : option.name);
+    setBulkCatOpen(false);
+  }
   // 批量改分类：空分类表示清成未分类
   async function applyBulkCategory(nextCategoryId) {
     const ids = pickedIds;
@@ -1712,6 +1763,8 @@ function Bills() {
         body: { ids, categoryId: nextCategoryId ? Number(nextCategoryId) : null },
       });
       setPicked({});
+      setBulkCategory('');
+      setBulkCatQuery('');
       await load();
       setNotice(`已改 ${result.updated} 笔的分类`);
     } catch (err) {
@@ -1883,22 +1936,47 @@ function Bills() {
       {shownIds.length > 0 && (
         <div className="card bill-bulk">
           <span>已选 <b>{shownIds.length}</b> 笔</span>
-          <select value={bulkCategory} onChange={(e) => setBulkCategory(e.target.value)}>
-            <option value="">改到哪个分类…</option>
-            <option value="__none__">清除分类（设为未分类）</option>
-            {[['expense', '支出'], ['income', '收入']].map(([value, label]) => (
-              <optgroup key={value} label={label}>
-                {categories.filter((c) => !c.archived && c.kind === value).map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
+          <div className="member-picker bulk-cat-picker">
+            <input
+              value={bulkCatQuery}
+              onChange={(e) => { setBulkCatQuery(e.target.value); setBulkCategory(''); setBulkCatOpen(true); }}
+              onFocus={() => setBulkCatOpen(true)}
+              onBlur={() => setBulkCatOpen(false)}
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter') return;
+                // 回车直接吃下第一个匹配项，省得再点一次下拉
+                e.preventDefault();
+                if (bulkMatches[0]) pickBulkCategory(bulkMatches[0]);
+              }}
+              placeholder="搜分类，比如 餐饮"
+              autoComplete="off"
+            />
+            {bulkCatOpen && (
+              <div className="member-suggest">
+                {bulkMatches.length === 0 && <div className="member-suggest-empty tiny muted">没匹配到分类</div>}
+                {bulkMatches.slice(0, 60).map((option) => (
+                  <button
+                    type="button"
+                    className="member-suggest-item"
+                    key={option.id}
+                    // 按住鼠标不让输入框失焦，不然下拉先关掉，click 就收不到了
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => pickBulkCategory(option)}
+                  >
+                    <b>{option.parentName ? `${option.parentName} / ${option.name}` : option.name}</b>
+                    <span className="tiny muted">
+                      {option.kind === 'expense' ? '支出' : option.kind === 'income' ? '收入' : '不分类'}
+                    </span>
+                  </button>
                 ))}
-              </optgroup>
-            ))}
-          </select>
+              </div>
+            )}
+          </div>
           <button
             className="primary small"
             type="button"
-            disabled={bulkBusy || !bulkCategory}
-            onClick={() => applyBulkCategory(bulkCategory === '__none__' ? '' : bulkCategory)}
+            disabled={bulkBusy || !bulkTarget}
+            onClick={() => applyBulkCategory(bulkTarget === '__none__' ? '' : bulkTarget)}
           >
             {bulkBusy ? '处理中…' : '应用'}
           </button>
@@ -2653,6 +2731,7 @@ function AccountsPage() {
   const [aliases, setAliases] = useState([]);
   const [mergeModal, setMergeModal] = useState(null);
   const [error, setError] = useState('');
+  useScrollLock(!!mergeModal);
 
   const primary = accounts.filter((a) => !a.mergedInto);
   const mergedOf = (id) => accounts.filter((a) => a.mergedInto === id);
@@ -3196,6 +3275,7 @@ const DUP_LEVELS = [
 ];
 
 function ConfirmModal({ title, body, confirmLabel = '确定', danger = true, busy = false, onClose, onConfirm }) {
+  useScrollLock(true);
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal stack" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
@@ -3559,6 +3639,7 @@ function bookAaOn(book) {
 
 // 账本编辑弹窗：改名/改类型、管参与人和协作成员、开关分享、归档、删除
 function BookEditModal({ book, onClose, onChanged }) {
+  useScrollLock(true);
   const [name, setName] = useState(book.name);
   const [kind, setKind] = useState(book.kind);
   const [person, setPerson] = useState('');
