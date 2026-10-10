@@ -211,6 +211,24 @@ const TX_SELECT = `
   LEFT JOIN accounts b ON b.id = t.to_account_id
 `;
 
+// 分摊人：存成 JSON 数组字符串。NULL = 从没设过，算账时退回「全员平分」的老规矩
+export function parseShareWith(value) {
+  if (value == null || String(value).trim() === '') return null;
+  try {
+    const list = JSON.parse(value);
+    if (!Array.isArray(list)) return null;
+    return [...new Set(list.map((name) => String(name).trim()).filter(Boolean))];
+  } catch {
+    return null;
+  }
+}
+
+export function encodeShareWith(list) {
+  if (!Array.isArray(list)) return null;
+  const names = [...new Set(list.map((name) => String(name).trim()).filter(Boolean))];
+  return JSON.stringify(names);
+}
+
 export function presentTransaction(row, images = null) {
   const category = row.parent_name
     ? `${row.parent_name} / ${row.category_name}`
@@ -228,6 +246,8 @@ export function presentTransaction(row, images = null) {
     categoryName: category,
     categoryLabel: row.category_label || '',
     memberName: row.member_name || '',
+    // 这笔账单分摊给哪几个人；null 表示没设过（老账单），算账时按全员平分
+    shareWith: parseShareWith(row.share_with),
     occurredAt: row.occurred_at,
     payee: row.payee || '',
     note: row.note || '',

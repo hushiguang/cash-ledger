@@ -1,13 +1,13 @@
 import crypto from 'node:crypto';
 import { db } from './db.js';
 
-export const BOOK_KINDS = ['personal', 'travel', 'family'];
+export const BOOK_KINDS = ['personal', 'travel', 'family', 'aa'];
 
 export function bookKindLabel(kind) {
-  return { personal: '个人', travel: '出游共享', family: '家庭' }[kind] || '账本';
+  return { personal: '个人', travel: '出游共享', family: '家庭', aa: 'AA' }[kind] || '账本';
 }
 
-export function presentBook(row, { role = null, ownerName = '', members = [] } = {}) {
+export function presentBook(row, { role = null, ownerName = '', members = [], participants = [], billPeople = [] } = {}) {
   return {
     id: row.id,
     name: row.name,
@@ -19,7 +19,12 @@ export function presentBook(row, { role = null, ownerName = '', members = [] } =
     archived: !!row.archived,
     shareEnabled: !!row.share_enabled,
     shareToken: row.share_token || '',
+    // 开启 AA 才展示参与人、算平摊；关了就只是大家一起记账
+    aaEnabled: !!row.aa_enabled,
     members,
+    participants: participants.map((p) => ({ id: p.id, name: p.name })),
+    // 账单里实际付过款/收过款的人，前端展示时和预设名单合并
+    billPeople: billPeople.map((p) => ({ name: p.name, expense: !!p.expense, income: !!p.income })),
   };
 }
 
@@ -33,6 +38,54 @@ export function bookMembers(bookId) {
     FROM book_members m JOIN users u ON u.id = m.user_id
     WHERE m.book_id = ? ORDER BY m.id
   `).all(Number(bookId));
+}
+
+// 参与人：账本里预设的「都有谁」，不用登录账号也能算 AA，记账时当付款人候选
+export function bookParticipants(bookId) {
+  return db.prepare(
+    'SELECT id, name FROM book_participants WHERE book_id = ? ORDER BY sort, id',
+  ).all(Number(bookId));
+}
+
+// 账单里出现过的人：付款人（支出）+ 收款人（收入）。预设名单里没写的也要算进 AA，
+// 免得「付过钱但没预设」的人被漏掉、或者「只退款」的人被当成没参与
+export function bookBillPeople(bookId) {
+  const rows = db.prepare(`
+    SELECT member_name AS name, type
+    FROM transactions
+    WHERE book_id = ? AND type IN ('expense', 'income')
+      AND member_name IS NOT NULL AND TRIM(member_name) <> ''
+    GROUP BY member_name, type
+  `).all(Number(bookId));
+  const map = new Map();
+  for (const row of rows) {
+    const name = String(row.name || '').trim();
+    if (!name) continue;
+    const item = map.get(name) || { name, expense: false, income: false };
+    if (row.type === 'expense') item.expense = true;
+    if (row.type === 'income') item.income = true;
+    map.set(name, item);
+  }
+  return [...map.values()];
+}
+
+export function addBookParticipant(bookId, name) {
+  const clean = String(name || '').trim();
+  if (!clean) return null;
+  const sort = db.prepare(
+    'SELECT COALESCE(MAX(sort), 0) + 1 AS n FROM book_participants WHERE book_id = ?',
+  ).get(Number(bookId)).n;
+  db.prepare(
+    'INSERT OR IGNORE INTO book_participants (book_id, name, sort, created_at) VALUES (?, ?, ?, ?)',
+  ).run(Number(bookId), clean, sort, new Date().toISOString());
+  return db.prepare(
+    'SELECT id, name FROM book_participants WHERE book_id = ? AND name = ?',
+  ).get(Number(bookId), clean) || null;
+}
+
+export function removeBookParticipant(bookId, participantId) {
+  db.prepare('DELETE FROM book_participants WHERE book_id = ? AND id = ?')
+    .run(Number(bookId), Number(participantId));
 }
 
 export function ensurePersonalBook(userId) {

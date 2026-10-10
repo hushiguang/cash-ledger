@@ -9,7 +9,31 @@ export function setToken(token) {
   else localStorage.removeItem(TOKEN_KEY);
 }
 
-export async function api(path, options = {}) {
+// 全局 loading：所有请求都走这里计数，界面顶部显示一条进度条
+const busyListeners = new Set();
+let busyCount = 0;
+
+function emitBusy() {
+  busyListeners.forEach((listener) => listener(busyCount));
+}
+
+export function subscribeBusy(listener) {
+  busyListeners.add(listener);
+  listener(busyCount);
+  return () => busyListeners.delete(listener);
+}
+
+// 把一个 promise 计入全局 loading，导出/上传这类不走 api() 的请求也能用
+export function track(promise) {
+  busyCount += 1;
+  emitBusy();
+  return promise.finally(() => {
+    busyCount = Math.max(0, busyCount - 1);
+    emitBusy();
+  });
+}
+
+async function request(path, options = {}) {
   const headers = { ...(options.headers || {}) };
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -25,4 +49,8 @@ export async function api(path, options = {}) {
     throw error;
   }
   return data;
+}
+
+export function api(path, options = {}) {
+  return track(request(path, options));
 }

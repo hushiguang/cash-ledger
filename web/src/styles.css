@@ -612,6 +612,45 @@ h2 { font-size: 18px; }
 .pie-legend b { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .pie-legend em { color: var(--muted); font-style: normal; font-size: 12px; width: 40px; text-align: right; white-space: nowrap; }
 .pie-bills { margin-top: 14px; }
+/* AA 平摊表：金额一律右对齐 + 等宽数字，几列之间好上下对照 */
+.aa-table th:nth-child(n + 2), .aa-table td:nth-child(n + 2) { text-align: right; font-variant-numeric: tabular-nums; }
+.aa-table td:last-child { white-space: nowrap; }
+/* 账本列表 */
+.books-layout { display: flex; flex-direction: column; gap: 18px; }
+.book-create .form-row { align-items: end; gap: 10px; }
+.book-create .form-row label { flex: 1 1 160px; min-width: 140px; }
+.book-create .form-row button { margin-bottom: 2px; }
+
+.book-list-card { overflow: auto; }
+.book-table { table-layout: fixed; width: 100%; }
+.book-table th, .book-table td { padding: 10px 8px; vertical-align: middle; }
+.book-table th { font-size: 12px; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--line); }
+.book-table th:nth-child(1), .book-table td:nth-child(1) { width: 26%; }
+.book-table th:nth-child(2), .book-table td:nth-child(2) { width: 10%; text-align: center; }
+.book-table th:nth-child(3), .book-table td:nth-child(3) { width: 22%; }
+.book-table th:nth-child(4), .book-table td:nth-child(4) { width: 12%; text-align: center; }
+.book-table th:nth-child(5), .book-table td:nth-child(5) { width: 30%; text-align: right; }
+
+.book-name-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.book-name { font-size: 15px; font-weight: 600; line-height: 1.35; }
+.book-name-row .tag.current { background: var(--chip); color: var(--coral); }
+.book-name-row .ghost.tiny { padding: 2px 6px; font-size: 12px; }
+
+.book-people-line { display: flex; align-items: baseline; gap: 6px; font-size: 13px; line-height: 1.5; }
+.book-people-line .muted { min-width: 2.2em; flex-shrink: 0; }
+
+.book-actions-row { display: flex; justify-content: flex-end; align-items: center; flex-wrap: nowrap; gap: 6px; }
+.book-actions-row .secondary,
+.book-actions-row .ghost,
+.book-actions-row .ghost.danger-text,
+.book-actions-row .danger { white-space: nowrap; padding: 4px 8px; font-size: 12px; border-radius: 6px; }
+
+.book-table tbody tr:hover { background: var(--soft); }
+.aa-transfers { margin-top: 14px; }
+.aa-transfers h3 { margin: 0 0 6px; font-size: 14px; }
+.aa-transfers ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.aa-transfers li { display: flex; align-items: center; gap: 6px; font-size: 14px; }
+.aa-transfers li span { margin-left: auto; font-variant-numeric: tabular-nums; }
 .small { padding: 4px 12px; font-size: 13px; }
 .list > .item:first-child, .list > div:first-child .item { border-top: 0; }
 .bar { height: 6px; border-radius: 99px; background: var(--soft); overflow: hidden; margin: 0 0 8px; }
@@ -675,6 +714,9 @@ th { color: var(--muted); font-size: 12px; font-weight: 500; }
 tbody tr:last-child td { border-bottom: 0; }
 .checks { display: flex; gap: 8px; flex-wrap: wrap; }
 .checks label { flex-direction: row; align-items: center; color: var(--ink); background: var(--soft); border-radius: 999px; padding: 4px 10px; }
+/* 分摊人勾选：默认全选，谁没参与就取消勾选 */
+.share-picks { margin-top: 6px; }
+.share-picks input { width: 14px; height: 14px; accent-color: var(--coral); }
 .preview { max-height: 420px; overflow: auto; }
 .tag {
   display: inline-block;
@@ -738,6 +780,40 @@ tbody tr:last-child td { border-bottom: 0; }
 .book-card .book-section:last-of-type { border-bottom: 0; }
 .book-section-title { display: block; font-size: 12px; color: var(--muted); letter-spacing: .06em; margin-bottom: 8px; }
 .book-members { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+/* AA 开关：勾了才显示参与人、算平摊 */
+.book-aa-toggle {
+  display: flex;
+  /* 全局 label 是纵向排列的，这里要改回横向：选择框和文字在一行 */
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  font-size: 14px;
+  line-height: 1.45;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+.book-aa-toggle input {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  accent-color: var(--coral);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.book-aa-toggle > span { flex: 1; min-width: 0; }
+.book-aa-toggle b {
+  display: inline;
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--muted);
+  margin-left: 4px;
+}
+.book-aa-toggle input:disabled { cursor: not-allowed; }
+.book-aa-toggle input:disabled ~ span { opacity: .6; }
+/* 创建/编辑表单里让开关独占一行，不然说明文字会被挤成窄条 */
+.form-row.wrap > label.book-aa-toggle,
+.book-create .book-aa-toggle { flex: 1 1 100%; min-width: 0; }
 .book-add-member { display: flex; gap: 8px; align-items: stretch; }
 .book-add-member input { flex: 1; min-width: 120px; }
 .book-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 12px 18px; }
@@ -898,7 +974,50 @@ h2 .tx-flag { margin-left: 8px; vertical-align: 2px; }
 .book-card.active { border-color: var(--violet); box-shadow: inset 0 0 0 1px var(--violet); }
 .book-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .book-card-head .spacer { flex: 1; }
-.share-page { width: min(560px, 100%); display: grid; gap: 12px; }
+.share-page {
+  width: min(1100px, 100%);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    "header header"
+    "form side"
+    "list side";
+  gap: 16px;
+  align-items: start;
+}
+.share-header { grid-area: header; }
+.share-header h1 { margin-bottom: 4px; }
+.share-form { grid-area: form; }
+.share-side { grid-area: side; display: grid; gap: 12px; position: sticky; top: 16px; align-self: start; }
+.share-list { grid-area: list; }
+.share-summary-card { padding-bottom: 12px; }
+.share-summary-nums { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; text-align: center; font-size: 12px; margin-top: 10px; }
+.share-summary-nums span { display: block; color: var(--muted); margin-bottom: 2px; }
+.share-summary-nums b { font-size: 15px; }
+.share-pie { display: grid; place-items: center; padding: 8px 0 4px; }
+.share-pie svg { width: 170px; height: 170px; }
+.share-pie-total { font-size: 18px; font-weight: 700; fill: var(--ink); }
+.share-pie-label { font-size: 11px; fill: var(--muted); }
+.share-pie-legend { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; font-size: 13px; }
+.share-pie-legend li { display: flex; align-items: center; gap: 8px; }
+.share-pie-legend .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.share-pie-legend b { margin-left: auto; font-variant-numeric: tabular-nums; }
+.share-pie-legend em { color: var(--muted); font-style: normal; font-size: 12px; width: 44px; text-align: right; }
+.share-aa-card .card-head { margin-bottom: 10px; }
+.share-aa-card .aa-table { width: 100%; font-size: 13px; }
+@media (max-width: 900px) {
+  .share-page {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "header"
+      "form"
+      "side"
+      "list";
+  }
+  .share-side { position: static; }
+  .share-summary-nums b { font-size: 14px; }
+}
 
 /* 图片：上传按钮 + 缩略图格子 */
 .file-btn {
@@ -931,4 +1050,26 @@ h2 .tx-flag { margin-left: 8px; vertical-align: 2px; }
   .calendar { gap: 4px; }
   .day { min-height: 68px; padding: 4px; }
   .side-tabs { flex-direction: row; }
+}
+
+/* 全局 loading：任何请求在飞，顶部就走一条进度条 */
+.busy-bar {
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: 3px;
+  z-index: 200;
+  overflow: hidden;
+  pointer-events: none;
+}
+.busy-bar span {
+  display: block;
+  height: 100%;
+  width: 35%;
+  border-radius: 0 2px 2px 0;
+  background: linear-gradient(90deg, var(--violet), var(--sky));
+  animation: busy-slide 0.9s ease-in-out infinite;
+}
+@keyframes busy-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
 }

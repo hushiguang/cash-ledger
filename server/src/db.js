@@ -54,6 +54,8 @@ db.exec(`
     occurred_at TEXT NOT NULL,
     payee TEXT,
     note TEXT,
+    -- 这笔账单由哪些人分摊（JSON 数组字符串）。NULL = 没设过，走老规矩全员平分
+    share_with TEXT,
     source TEXT NOT NULL DEFAULT 'manual',
     external_id TEXT,
     recurring_rule_id INTEGER,
@@ -169,6 +171,17 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS ix_book_members_user ON book_members(user_id);
 
+  -- 账本参与人：AA/出游账本里先把「都有谁」预设好，记账时选付款人、平摊时按这批人算
+  CREATE TABLE IF NOT EXISTS book_participants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    sort INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    UNIQUE (book_id, name)
+  );
+  CREATE INDEX IF NOT EXISTS ix_book_participants_book ON book_participants(book_id);
+
   CREATE TABLE IF NOT EXISTS transaction_images (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     transaction_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
@@ -190,6 +203,13 @@ if (!accountColumns.some((c) => c.name === 'merged_into')) {
 const txColumns = db.prepare('PRAGMA table_info(transactions)').all();
 if (!txColumns.some((c) => c.name === 'book_id')) {
   rebuildTransactions();
+}
+
+// 打车这类「每笔坐车的人不一样」的账本：每笔账单记下它自己的分摊人。
+// 老账单保持 NULL，算账时退回全员平分，行为不变
+const shareColumns = db.prepare('PRAGMA table_info(transactions)').all();
+if (!shareColumns.some((c) => c.name === 'share_with')) {
+  db.exec('ALTER TABLE transactions ADD COLUMN share_with TEXT');
 }
 
 function rebuildTransactions() {
@@ -275,6 +295,22 @@ db.prepare(`
     SELECT id FROM books WHERE books.owner_id = recurring_rules.user_id AND books.kind = 'personal'
   ) WHERE book_id IS NULL
 `).run();
+
+// 账本是否开启 AA 平摊：出游/家庭账本可以只记账不算账，AA 类型默认就是开的。
+// 老账本只要已经有参与人或账单里出现过付款人，就当成开着，免得原来的平摊数据凭空消失。
+const bookColumns = db.prepare('PRAGMA table_info(books)').all();
+if (!bookColumns.some((c) => c.name === 'aa_enabled')) {
+  db.exec('ALTER TABLE books ADD COLUMN aa_enabled INTEGER NOT NULL DEFAULT 0');
+  db.prepare("UPDATE books SET aa_enabled = 1 WHERE kind = 'aa'").run();
+  db.prepare(`
+    UPDATE books SET aa_enabled = 1
+    WHERE aa_enabled = 0 AND (
+      EXISTS (SELECT 1 FROM book_participants p WHERE p.book_id = books.id)
+      OR EXISTS (SELECT 1 FROM transactions t
+                 WHERE t.book_id = books.id AND t.member_name IS NOT NULL AND TRIM(t.member_name) <> '')
+    )
+  `).run();
+}
 
 export function dataDirPath() {
   return dataDir;

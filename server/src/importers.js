@@ -4,6 +4,7 @@ import { PDFParse } from 'pdf-parse';
 import { parseDateTime } from './dates.js';
 import { amountMark, yuanToCents } from './money.js';
 import { inferTransferTarget } from './transfer-rules.js';
+import { resolveCategoryPath } from './taxonomy.js';
 
 export class ImportError extends Error {
   constructor(message) {
@@ -93,7 +94,8 @@ export function findHeader(rows) {
   for (let i = 0; i < Math.min(rows.length, 80); i += 1) {
     const cells = rows[i].map(normHeader);
     const hasTime = cells.some((c) => /交易时间|付款时间|交易创建时间|^时间$|^日期$/.test(c));
-    const hasMoney = cells.some((c) => c === '金额' || c.includes('金额') || c === '收/支' || c === '类型');
+    // 出游账本的表头是「付款人/费用/费用类型/费用详情/日期」，没有「金额」二字
+    const hasMoney = cells.some((c) => c === '金额' || c.includes('金额') || c === '收/支' || c === '类型' || c === '费用' || c === '费用类型');
     if (hasTime && hasMoney && cells.filter(Boolean).length >= 3) return i;
   }
   return -1;
@@ -258,14 +260,18 @@ function blank(row) {
     amountCents: row.amountCents ?? null,
     categoryName: row.categoryName || '',
     subcategoryName: row.subcategoryName || '',
+    categoryLabel: row.categoryLabel || '',
     accountName: row.accountName || '',
     toAccountName: row.toAccountName || '',
+    memberName: row.memberName || '',
     payee: row.payee || '',
     note: row.note || '',
+    // 分摊人：null = 没设过（全员平摊），[] = 自己承担，其余是名单
+    shareWith: Array.isArray(row.shareWith) ? row.shareWith : null,
     externalId: row.externalId || '',
     skipReason: row.skipReason || null,
     incoming: !!row.incoming,
-  };
+    };
 }
 
 function finalize(row) {
@@ -546,24 +552,67 @@ export function parseQianji(matrix) {
   });
 }
 
+// member 是出游/家庭账本里的「付款人」，只在共享账本用得上，普通账单没有这一列
 const FIELD_ALIASES = {
   date: ['时间', '日期', '交易时间', '付款时间'],
-  amount: ['金额', '金额(元)'],
+  amount: ['金额', '金额(元)', '费用', '费用(元)', '消费金额'],
   type: ['类型', '收/支'],
-  category: ['分类', '一级分类', '交易分类'],
+  category: ['分类', '一级分类', '交易分类', '费用类型', '类别'],
   subcategory: ['二级分类'],
   account: ['账户', '账户1', '支付方式', '收/付款方式'],
   toAccount: ['账户2', '转入账户'],
-  payee: ['交易对方', '对方', '商户名称', '商家'],
-  note: ['备注', '商品', '商品说明', '交易说明'],
+  payee: ['交易对方', '对方', '商户名称', '商家', '费用详情', '项目'],
+  note: ['备注', '商品', '商品说明', '交易说明', '说明', '详情'],
   externalId: ['交易单号', '交易订单号', '交易号', '单号'],
+  member: ['付款人', '成员', '谁付的', '付款方', '报销人'],
+  // 分摊人：这笔钱摊给谁。空 = 按账本参与人平分；「自己」= 请客，不算 AA
+  share: ['分摊人', '参与人', '平摊人', '共同消费人', '谁一起', 'AA人'],
 };
 
+// 「胡胡、楠楠」→ ['胡胡','楠楠']；空 → null（全员平摊）；「自己」→ []（自己承担）
+function parseShareNames(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+  if (/^(自己|无|不分摊|自付)$/.test(raw)) return [];
+  const names = raw.split(/[,，、;；\/|]+/).map((item) => item.trim()).filter(Boolean);
+  return names.length ? [...new Set(names)] : null;
+}
+
+function normKey(alias) {
+  return alias.replace(/\s/g, '').replace(/（元）|\(元\)/g, '');
+}
+
+// 先按完全相等占列，再按包含关系补剩下的字段。
+// 不分两轮的话，「费用」会把「费用类型」那一列抢走，金额和分类就撞在同一列上。
 export function suggestMapping(headers) {
+  const norm = headers.map(normHeader);
+  const taken = new Set();
   const mapping = {};
   for (const [field, aliases] of Object.entries(FIELD_ALIASES)) {
-    const i = col(headers, aliases);
-    if (i >= 0) mapping[field] = headers[i];
+    const keys = aliases.map(normKey);
+    const i = norm.findIndex((h, index) => !taken.has(index) && keys.includes(h));
+    if (i >= 0) {
+      mapping[field] = headers[i];
+      taken.add(i);
+    }
+  }
+  for (const [field, aliases] of Object.entries(FIELD_ALIASES)) {
+    if (mapping[field]) continue;
+    const keys = aliases.map(normKey);
+    let best = -1;
+    let bestLength = Infinity;
+    norm.forEach((h, index) => {
+      if (taken.has(index) || !h) return;
+      if (!keys.some((k) => h.includes(k) || k.includes(h))) return;
+      if (h.length < bestLength) {
+        best = index;
+        bestLength = h.length;
+      }
+    });
+    if (best >= 0) {
+      mapping[field] = headers[best];
+      taken.add(best);
+    }
   }
   return mapping;
 }
@@ -582,30 +631,54 @@ export function parseCustom(matrix, mapping = {}) {
   const transferValues = mapping.transferValues || ['转账', '还款'];
   return rows.map((row) => {
     const rawType = at(row, idx.type);
-    let parsed = directionOf(rawType);
+    // 空字符串会被 directionOf 当成「不计收支」的转账，所以没有这一列时直接按默认类型走
+    let parsed = rawType
+      ? directionOf(rawType)
+      : { type: mapping.defaultType || (idx.type < 0 ? 'expense' : null) };
     if (!parsed.type && !parsed.skip && rawType) {
       if (expenseValues.includes(rawType)) parsed = { type: 'expense' };
       else if (incomeValues.includes(rawType)) parsed = { type: 'income' };
       else if (transferValues.includes(rawType)) parsed = { type: 'transfer' };
     }
-    if (!parsed.type && !parsed.skip) parsed = { type: mapping.defaultType || null };
+    // 出游账本这类表格没有「收/支」列，没映射 type 就默认按支出记，否则整表都会被跳过
+    if (!parsed.type && !parsed.skip) parsed = { type: mapping.defaultType || (idx.type < 0 ? 'expense' : null) };
     const accountName = at(row, idx.account);
     const toAccountName = at(row, idx.toAccount);
     const payee = at(row, idx.payee);
     const note = at(row, idx.note);
-    const flow = flowOf({
-      kind: rawType, status: '', dir: parsed, accountName, toAccountName, payee,
-    });
+    const memberName = at(row, idx.member);
+    const shareWith = parseShareNames(at(row, idx.share));
+    // 表里没有「收/支」列时（出游账本就是），别走转账推断：
+    // 那套逻辑靠 kindText 判断，空字符串会被当成转账，整表都记不成支出
+    const flow = rawType
+      ? flowOf({
+        kind: rawType, status: '', dir: parsed, accountName, toAccountName, payee,
+      })
+      : { type: parsed.type, skipReason: null, accountName: '' };
+    let type = flow.type || parsed.type;
+    // 负数金额当成退款：金额取绝对值，支出改记收入（退票、退押金就是这么记的）
+    let amountCents = yuanToCents(at(row, idx.amount));
+    if (amountCents != null && amountCents < 0) {
+      amountCents = Math.abs(amountCents);
+      if (type === 'expense') type = 'income';
+    }
+    const categoryText = at(row, idx.category);
+    // 认得出的分类走统一分类体系；认不出的（出游账本的「玩拼豆」「外带螃蟹」这类）
+    // 原样留在分类标签上，否则全被并进「其他」，看不出钱花在哪
+    const knownCategory = type === 'transfer' ? null : resolveCategoryPath(categoryText, type);
     return finalize({
       occurredAt: parseDateTime(at(row, idx.date)),
-      type: flow.type || parsed.type,
-      amountCents: yuanToCents(at(row, idx.amount)),
-      categoryName: categoryFor(flow.type || parsed.type, note, at(row, idx.category), /转账/.test(rawType) ? '转账' : '其他'),
+      type,
+      amountCents,
+      categoryName: knownCategory ? categoryFor(type, note, categoryText, /转账/.test(rawType) ? '转账' : '其他') : '',
+      categoryLabel: knownCategory ? '' : categoryText,
       subcategoryName: at(row, idx.subcategory),
       accountName: flow.accountName || accountName,
       toAccountName: (flow.type || parsed.type) === 'transfer' ? (flow.toAccountName || toAccountName) : '',
+      memberName,
       payee,
       note,
+      shareWith,
       externalId: at(row, idx.externalId),
       skipReason: flow.skipReason || parsed.skip || null,
     });

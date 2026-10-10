@@ -26,10 +26,12 @@ import {
   accountOwned,
   categoryOwned,
   deleteAccountAlias,
+  encodeShareWith,
   ensureAccount,
   ensureCategory,
   listAccountAliases,
   mergeAccount,
+  parseShareWith,
   presentAccount,
   presentTransaction,
   resolveAccount,
@@ -41,13 +43,17 @@ import {
   bookById,
   bookByShareToken,
   bookKindLabel,
+  addBookParticipant,
   bookMembers,
+  bookBillPeople,
+  bookParticipants,
   canManageBook,
   canSeeBook,
   canWriteBook,
   ensurePersonalBook,
   newShareToken,
   presentBook,
+  removeBookParticipant,
   roleInBook,
   saveImages,
   transactionImages,
@@ -57,7 +63,7 @@ import { fetchImage, isAllowedImageUrl, uploadImage } from './imagehost.js';
 import { parseFile } from './importers.js';
 import { findDuplicatePairs, groupDuplicates, ignorePair, listIgnores, unignorePair } from './duplicates.js';
 import { normalizeAccountName, resolveCategoryPath } from './taxonomy.js';
-import { toCsv, toXlsx } from './export.js';
+import { importTemplate, toCsv, toXlsx } from './export.js';
 import {
   generateRule,
   initialNextRun,
@@ -241,14 +247,16 @@ function insertTransaction(user, body, source = 'manual', externalId = null, rec
     }
   }
   const memberName = String(body.memberName || '').trim() || null;
+  // 分摊人：传了数组才写（空数组 = 这笔我自己承担，不分摊给别人）；没传保持 NULL = 全员平分
+  const shareWith = Array.isArray(body.shareWith) ? encodeShareWith(body.shareWith) : null;
   const info = db.prepare(`
     INSERT OR IGNORE INTO transactions (
       user_id, book_id, type, amount_cents, account_id, to_account_id, category_id, category_label,
-      occurred_at, payee, note, member_name, source, external_id, recurring_rule_id, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      occurred_at, payee, note, member_name, share_with, source, external_id, recurring_rule_id, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     book.owner_id, book.id, type, amountCents, account ? account.id : null, toAccountId, categoryId, categoryLabel,
-    occurredAt, body.payee || null, body.note || null, memberName, source, externalId || null,
+    occurredAt, body.payee || null, body.note || null, memberName, shareWith, source, externalId || null,
     recurringRuleId, new Date().toISOString(),
   );
   if (info.changes && Array.isArray(body.images)) saveImages(Number(info.lastInsertRowid), body.images);
@@ -514,6 +522,8 @@ function bookPayload(user, row) {
     role: roleInBook(user, row),
     ownerName: members.find((m) => m.user_id === row.owner_id)?.display_name || '',
     members: members.map((m) => ({ id: m.user_id, name: m.display_name, username: m.username, role: m.role })),
+    participants: bookParticipants(row.id),
+    billPeople: bookBillPeople(row.id),
   });
 }
 
@@ -539,17 +549,21 @@ app.get('/api/books', authRequired, (req, res) => {
 app.post('/api/books', authRequired, wrap((req, res) => {
   const name = String(req.body.name || '').trim();
   if (!name) return fail(res, 400, '请填写账本名');
-  const kind = ['personal', 'travel', 'family'].includes(req.body.kind) ? req.body.kind : 'travel';
+  const kind = ['personal', 'travel', 'family', 'aa'].includes(req.body.kind) ? req.body.kind : 'travel';
   if (kind === 'personal' && db.prepare(
     "SELECT id FROM books WHERE owner_id = ? AND kind = 'personal'",
   ).get(req.user.id)) {
     return fail(res, 409, '已经有一个个人账本了');
   }
   const now = new Date().toISOString();
+  // AA 账本默认开着；出游/家庭默认只记账，创建时可以自己勾上
+  const aaEnabled = req.body.aaEnabled != null
+    ? (req.body.aaEnabled ? 1 : 0)
+    : (kind === 'aa' ? 1 : 0);
   try {
     const info = db.prepare(
-      'INSERT INTO books (owner_id, name, kind, created_at) VALUES (?, ?, ?, ?)',
-    ).run(req.user.id, name, kind, now);
+      'INSERT INTO books (owner_id, name, kind, aa_enabled, created_at) VALUES (?, ?, ?, ?, ?)',
+    ).run(req.user.id, name, kind, aaEnabled, now);
     const id = Number(info.lastInsertRowid);
     db.prepare(
       'INSERT OR IGNORE INTO book_members (book_id, user_id, role, created_at) VALUES (?, ?, ?, ?)',
@@ -566,8 +580,18 @@ app.patch('/api/books/:id', authRequired, wrap((req, res) => {
   const name = req.body.name != null ? String(req.body.name).trim() : row.name;
   if (!name) return fail(res, 400, '请填写账本名');
   const archived = req.body.archived != null ? (req.body.archived ? 1 : 0) : row.archived;
+  // 个人账本只有一个，也不能从个人改成别的；出游/家庭/AA 之间可以随便改
+  const kind = ['travel', 'family', 'aa'].includes(req.body.kind) && row.kind !== 'personal'
+    ? req.body.kind
+    : row.kind;
+  // AA 开关：个人账本永远是关的，切到 AA 类型自动开
+  let aaEnabled = row.aa_enabled;
+  if (req.body.aaEnabled != null) aaEnabled = req.body.aaEnabled ? 1 : 0;
+  if (req.body.kind === 'aa') aaEnabled = 1;
+  if (row.kind === 'personal') aaEnabled = 0;
   try {
-    db.prepare('UPDATE books SET name = ?, archived = ? WHERE id = ?').run(name, archived, row.id);
+    db.prepare('UPDATE books SET name = ?, kind = ?, archived = ?, aa_enabled = ? WHERE id = ?')
+      .run(name, kind, archived, aaEnabled, row.id);
   } catch {
     return fail(res, 409, '已经有同名账本了');
   }
@@ -610,6 +634,25 @@ app.delete('/api/books/:id/members/:userId', authRequired, wrap((req, res) => {
   res.json({ book: bookPayload(req.user, bookById(row.id)) });
 }));
 
+// 参与人：账本里预设「都有谁」，AA 平摊按这批人算，记账时也是付款人的候选
+app.post('/api/books/:id/participants', authRequired, wrap((req, res) => {
+  const row = bookById(req.params.id);
+  if (!row || !canManageBook(req.user, row)) return fail(res, 404, '账本不存在');
+  if (row.kind === 'personal') return fail(res, 400, '个人账本不用设参与人');
+  const name = String(req.body.name || '').trim();
+  if (!name) return fail(res, 400, '请填写名字');
+  if (name.length > 24) return fail(res, 400, '名字太长了');
+  addBookParticipant(row.id, name);
+  res.json({ book: bookPayload(req.user, bookById(row.id)) });
+}));
+
+app.delete('/api/books/:id/participants/:participantId', authRequired, wrap((req, res) => {
+  const row = bookById(req.params.id);
+  if (!row || !canManageBook(req.user, row)) return fail(res, 404, '账本不存在');
+  removeBookParticipant(row.id, req.params.participantId);
+  res.json({ book: bookPayload(req.user, bookById(row.id)) });
+}));
+
 // 分享链接：开就生成 token，关就作废
 app.post('/api/books/:id/share', authRequired, wrap((req, res) => {
   const row = bookById(req.params.id);
@@ -625,10 +668,41 @@ app.post('/api/books/:id/share', authRequired, wrap((req, res) => {
 app.get('/api/share/:token', (req, res) => {
   const book = bookByShareToken(req.params.token);
   if (!book) return fail(res, 404, '链接已失效');
-  const rows = transactionRows({ id: book.owner_id, isAdmin: false }, { bookId: book.id }, 200);
+  const owner = { id: book.owner_id, isAdmin: false };
+  const rows = transactionRows(owner, { bookId: book.id }, 200);
   const images = transactionImages(rows.map((row) => row.id));
+  // 分享页也要展示全部时间的总支出/收入、AA 平摊
+  const totals = transactionTotal(owner, { bookId: book.id });
+  // 逐笔取：AA 要按每笔账单自己勾选的分摊人算
+  const billRows = db.prepare(`
+    SELECT t.type AS kind,
+      COALESCE(NULLIF(TRIM(t.member_name), ''), '未填') AS member_name,
+      t.amount_cents AS amount_cents,
+      t.share_with AS share_with
+    FROM transactions t
+    WHERE t.book_id = ? AND t.type IN ('expense', 'income')
+  `).all(book.id);
+  const presetNames = bookParticipants(book.id).map((p) => p.name);
+  // 没开 AA 的账本只记账不算账，分享页也不展示平摊
+  const aa = book.aa_enabled ? computeAa(billRows, presetNames) : null;
+  // 参与人 = 预设 + 账单里付过款/收过款的人，补账下拉里都能直接选
+  const allParticipants = [...new Set([...presetNames, ...bookBillPeople(book.id).map((p) => p.name)])];
   res.json({
-    book: { id: book.id, name: book.name, kind: book.kind, kindLabel: bookKindLabel(book.kind) },
+    book: {
+      id: book.id,
+      name: book.name,
+      kind: book.kind,
+      kindLabel: bookKindLabel(book.kind),
+      aaEnabled: !!book.aa_enabled,
+      // 参与人带过去，补账时不用自己打名字，免得同一个人打成两个名字、AA 算错
+      participants: book.aa_enabled ? allParticipants : [],
+    },
+    summary: {
+      expense: centsToYuan(totals.expenseCents),
+      income: centsToYuan(totals.incomeCents),
+      net: centsToYuan(totals.incomeCents - totals.expenseCents),
+    },
+    aa,
     entries: rows.map((row) => presentTransaction(row, images.get(row.id) || [])),
   });
 });
@@ -746,6 +820,16 @@ function transactionWhere(user, query) {
     where.push('t.source = ?');
     params.push(String(query.source));
   }
+  // 按成员（付款人/收款人）筛选，出游/家庭账本用；传 none 表示没填成员
+  const memberName = String(query.memberName || '').trim();
+  if (memberName) {
+    if (memberName === 'none') where.push("(t.member_name IS NULL OR TRIM(t.member_name) = '')");
+    else {
+      // 汇总里是按 TRIM 后的名字聚合的，筛选也要 TRIM，否则带空格的旧数据点不开
+      where.push("TRIM(COALESCE(t.member_name, '')) = ?");
+      params.push(memberName);
+    }
+  }
   // 按一级分类筛选：命中二级分类时也算进来，支持多个 id（同名分类）
   // 传 none 表示「未分类」：账单没有分类，或分类记录已不存在
   const categoryParts = String(query.categoryIds || '')
@@ -764,6 +848,12 @@ function transactionWhere(user, query) {
   }
   if (wantUncategorized) categoryClauses.push('(t.category_id IS NULL OR c.id IS NULL)');
   if (categoryClauses.length) where.push(`(${categoryClauses.join(' OR ')})`);
+  // 按分类名筛选：共享账本里手填的分类只存了文本（没有 category_id），只能用名字匹配
+  const categoryLabel = String(query.categoryLabel || '').trim();
+  if (categoryLabel) {
+    where.push('(t.category_label = ? OR c.name = ? OR p.name = ?)');
+    params.push(categoryLabel, categoryLabel, categoryLabel);
+  }
   // 金额区间，单位是元
   const minCents = amountCents(query.minAmount);
   if (minCents !== null) {
@@ -818,6 +908,112 @@ function transactionRows(user, query, limit, offset) {
 }
 
 // 按当前筛选条件统计笔数和金额。金额只算支出和收入，转账是资金搬家不计入
+// 把金额（分）平均分成 count 份，余数一分一分补给前面的人，保证几份加起来正好等于总额
+function splitEvenly(cents, count) {
+  const base = Math.trunc(cents / count);
+  let leftover = cents - base * count;
+  return Array.from({ length: count }, () => {
+    let extra = 0;
+    if (leftover !== 0) {
+      extra = leftover > 0 ? 1 : -1;
+      leftover -= extra;
+    }
+    return base + extra;
+  });
+}
+
+// AA 平摊。逐笔算：每笔账单按它自己勾选的分摊人平分，打车这种「每天坐车的人不一样」就靠这个。
+// 没设过分摊人的老账单退回「全员平分」，行为跟以前一样。
+// billRows 是逐笔的（不聚合）：[{ kind, member_name, amount_cents, share_with }]
+function computeAa(billRows, presetNames = []) {
+  const paid = new Map();      // 自己垫的钱
+  const excluded = new Map();  // 声明自己承担的，不进 AA
+  const share = new Map();     // 该摊多少
+  const payerNames = new Set();
+  const sharerNames = new Set();
+  let legacyPool = 0;          // 没设分摊人的老账单：走全员平分
+  let aaPool = 0;              // 参与平摊的总额
+  let unassigned = 0;          // 没填付款人的部分
+
+  for (const row of billRows || []) {
+    const amount = Number(row.amount_cents) || 0;
+    if (!amount) continue;
+    const signed = row.kind === 'income' ? -amount : amount; // 收入当退款，抵掉垫付
+    const payer = row.member_name && row.member_name !== '未填' ? row.member_name : null;
+    if (payer) {
+      payerNames.add(payer);
+      paid.set(payer, (paid.get(payer) || 0) + signed);
+    } else {
+      unassigned += signed;
+    }
+    const picked = parseShareWith(row.share_with);
+    if (picked === null) {   // 老账单 / 没设过：进全员平分的池子
+      legacyPool += signed;
+      aaPool += signed;
+      continue;
+    }
+    if (!picked.length) {    // 一个都没勾：付款人自己承担，不算 AA
+      if (payer) excluded.set(payer, (excluded.get(payer) || 0) + signed);
+      continue;
+    }
+    aaPool += signed;
+    const heads = splitEvenly(signed, picked.length);
+    picked.forEach((name, index) => {
+      sharerNames.add(name);
+      share.set(name, (share.get(name) || 0) + heads[index]);
+    });
+  }
+
+  const legacySharers = [...new Set([...presetNames, ...payerNames])];
+  if (legacyPool && legacySharers.length) {
+    const heads = splitEvenly(legacyPool, legacySharers.length);
+    legacySharers.forEach((name, index) => share.set(name, (share.get(name) || 0) + heads[index]));
+  }
+
+  const names = [...new Set([...presetNames, ...payerNames, ...sharerNames])]
+    .sort((a, b) => (paid.get(b) || 0) - (paid.get(a) || 0));
+  const diff = new Map();
+  const members = names.map((name) => {
+    // 自己承担的（请客）不进 AA：垫付里先扣掉，不然「垫付 − 应摊」对不上差额
+    const own = excluded.get(name) || 0;
+    const inAa = (paid.get(name) || 0) - own;
+    const value = inAa - (share.get(name) || 0);
+    diff.set(name, value);
+    return {
+      name,
+      paid: centsToYuan(inAa),
+      share: centsToYuan(share.get(name) || 0),
+      diff: centsToYuan(value),
+      own: centsToYuan(own),
+    };
+  });
+  const creditors = names.filter((n) => diff.get(n) > 0).map((n) => ({ name: n, cents: diff.get(n) }));
+  const debtors = names.filter((n) => diff.get(n) < 0).map((n) => ({ name: n, cents: -diff.get(n) }));
+  creditors.sort((a, b) => b.cents - a.cents);
+  debtors.sort((a, b) => b.cents - a.cents);
+  const transfers = [];
+  let ci = 0;
+  let di = 0;
+  while (ci < creditors.length && di < debtors.length) {
+    const amount = Math.min(creditors[ci].cents, debtors[di].cents);
+    if (amount > 0) {
+      transfers.push({ from: debtors[di].name, to: creditors[ci].name, amount: centsToYuan(amount) });
+    }
+    creditors[ci].cents -= amount;
+    debtors[di].cents -= amount;
+    if (creditors[ci].cents <= 0) ci += 1;
+    if (debtors[di].cents <= 0) di += 1;
+  }
+  return {
+    total: centsToYuan(aaPool),
+    perPerson: centsToYuan(names.length ? Math.round(aaPool / names.length) : 0),
+    memberCount: names.length,
+    unassigned: centsToYuan(unassigned),
+    members,
+    transfers,
+  };
+}
+
 function transactionTotal(user, query) {
   const { where, params } = transactionWhere(user, query);
   const row = db.prepare(`
@@ -922,6 +1118,10 @@ app.patch('/api/transactions/:id', authRequired, wrap((req, res) => {
       memberName: req.body.memberName ?? current.member_name,
       bookId: current.book_id,
       images: req.body.images,
+      // 没传就沿用原来的分摊人（可能是 NULL = 全员平分）
+      shareWith: Array.isArray(req.body.shareWith)
+        ? req.body.shareWith
+        : parseShareWith(current.share_with),
     }, current.source, current.external_id, current.recurring_rule_id);
     const row = db.prepare(`${selectTransactions()} WHERE t.id = ?`).get(Number(info.lastInsertRowid));
     res.json({ transaction: presentWithImages(row) });
@@ -929,12 +1129,12 @@ app.patch('/api/transactions/:id', authRequired, wrap((req, res) => {
     db.prepare(`
       INSERT INTO transactions (
         id, user_id, book_id, type, amount_cents, account_id, to_account_id, category_id, category_label,
-        occurred_at, payee, note, member_name, source, external_id, recurring_rule_id, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        occurred_at, payee, note, member_name, share_with, source, external_id, recurring_rule_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       current.id, current.user_id, current.book_id, current.type, current.amount_cents, current.account_id,
       current.to_account_id, current.category_id, current.category_label, current.occurred_at,
-      current.payee, current.note, current.member_name,
+      current.payee, current.note, current.member_name, current.share_with,
       current.source, current.external_id, current.recurring_rule_id, current.created_at,
     );
     throw err;
@@ -1025,6 +1225,35 @@ app.get('/api/summary', authRequired, (req, res) => {
       ids: row.category_ids ? row.category_ids.split(',').map(Number) : [],
       amount: centsToYuan(row.amount_cents),
     }));
+  // 人员汇总：出游/家庭账本里按付款人（member_name）聚合，支出和收入各一组。
+  // 逐笔取出来，AA 还要用每笔自己的分摊人算账
+  const billRows = db.prepare(`
+    SELECT t.type AS kind,
+      COALESCE(NULLIF(TRIM(t.member_name), ''), '未填') AS member_name,
+      t.amount_cents AS amount_cents,
+      t.share_with AS share_with
+    FROM transactions t
+    WHERE ${scopeSql} AND t.type IN ('expense', 'income')
+      AND t.occurred_at >= ? AND t.occurred_at < date(?, '+1 day')
+  `).all(...scopeParams, start, end);
+  const shapeMembers = (kind) => {
+    const sums = new Map();
+    for (const row of billRows) {
+      if (row.kind !== kind) continue;
+      sums.set(row.member_name, (sums.get(row.member_name) || 0) + Math.abs(Number(row.amount_cents) || 0));
+    }
+    return [...sums.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, amount]) => ({ name, amount: centsToYuan(amount) }));
+  };
+  // AA 平摊：谁垫了多少、人均该摊多少、谁该补给谁。
+  // 账本没开 AA 就不算平摊，只当大家一起记账
+  const askedBookId = Number(req.query.bookId) || 0;
+  const askedBook = askedBookId && canSeeBook(req.user, askedBookId) ? bookById(askedBookId) : null;
+  const presetNames = askedBook ? bookParticipants(askedBook.id).map((p) => p.name) : [];
+  const aa = askedBook && !askedBook.aa_enabled
+    ? null
+    : computeAa(billRows, presetNames);
   const accounts = db.prepare(`${ACCOUNT_SQL} WHERE a.user_id = ? AND a.archived = 0 ORDER BY a.sort, a.id`).all(req.user.id);
   res.json({
     year,
@@ -1038,6 +1267,9 @@ app.get('/api/summary', authRequired, (req, res) => {
     net: centsToYuan(totals.income - totals.expense),
     categories: shape('expense'),
     incomeCategories: shape('income'),
+    members: shapeMembers('expense'),
+    incomeMembers: shapeMembers('income'),
+    aa,
     accounts: accounts.map(presentAccount),
   });
 });
@@ -1379,11 +1611,15 @@ function previewRow(row) {
     amount: row.amountCents == null ? '' : centsToYuan(row.amountCents),
     amountCents: row.amountCents,
     categoryName: row.categoryName || '',
+    categoryLabel: row.categoryLabel || '',
     subcategoryName: row.subcategoryName || '',
     accountName: row.accountName || '',
     toAccountName: row.toAccountName || '',
+    memberName: row.memberName || '',
     payee: row.payee || '',
     note: row.note || '',
+    // 分摊人跟着回前端，导入时才写得进账单
+    shareWith: Array.isArray(row.shareWith) ? row.shareWith : null,
     externalId: row.externalId || '',
     skipReason: row.skipReason,
     incoming: !!row.incoming,
@@ -1604,6 +1840,17 @@ const uploadImports = upload.fields([
   { name: 'files', maxCount: 30 },
   { name: 'file', maxCount: 1 },
 ]);
+
+// 下载导入模板：出游账本模板带「付款人」列，普通账单模板带「收/支」列
+app.get('/api/import/template', authRequired, wrap((req, res) => {
+  const { buffer, filename } = importTemplate(req.query.kind);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="import-template.xlsx"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+  );
+  res.end(buffer);
+}));
 
 app.post('/api/import/preview', authRequired, uploadImports, wrap(async (req, res) => {
   const files = [...(req.files?.files || []), ...(req.files?.file || [])];

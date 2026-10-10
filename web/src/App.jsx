@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
-import { api, getToken, setToken } from './api.js';
+import { api, getToken, setToken, subscribeBusy, track } from './api.js';
 
 const TYPES = [
   ['expense', '支出'],
@@ -48,6 +48,18 @@ function useSession() {
     api('/api/me').then((data) => setUser(data.user)).catch(() => setToken('')).finally(() => setReady(true));
   }, []);
   return { user, setUser, ready };
+}
+
+// 顶部全局 loading：任何一个请求在飞就显示，不用每个页面各写一遍
+function BusyBar() {
+  const [busy, setBusy] = useState(0);
+  useEffect(() => subscribeBusy(setBusy), []);
+  if (!busy) return null;
+  return (
+    <div className="busy-bar" role="status" aria-live="polite">
+      <span />
+    </div>
+  );
 }
 
 const THEME_KEY = 'qingji.theme';
@@ -134,7 +146,14 @@ function CreateBillModal({ open, onClose, onSaved }) {
         <h2>记一笔{books.currentBook ? ` · ${books.currentBook.name}` : ''}</h2>
         {error && <div className="error">{error}</div>}
         {shared ? (
-          <SharedBillFields form={form} setForm={setForm} accounts={books.accounts} categories={books.categories} />
+          <SharedBillFields
+            form={form}
+            setForm={setForm}
+            accounts={books.accounts}
+            categories={books.categories}
+            participants={bookPeopleNames(books.currentBook)}
+            requireMember={bookAaOn(books.currentBook)}
+          />
         ) : (
           <BookFields form={form} setForm={setForm} accounts={books.accounts} categories={books.categories} />
         )}
@@ -293,12 +312,14 @@ function AuthScreen({ onLogin }) {
   const [config, setConfig] = useState({ allowRegister: true, hasUsers: true });
   const [form, setForm] = useState({ username: '', password: '', displayName: '' });
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
   useEffect(() => {
     api('/api/auth/config').then(setConfig).catch(() => {});
   }, []);
   async function submit(event) {
     event.preventDefault();
     setError('');
+    setBusy(true);
     try {
       const path = mode === 'register' ? '/api/auth/register' : '/api/auth/login';
       const data = await api(path, { method: 'POST', body: form });
@@ -306,6 +327,8 @@ function AuthScreen({ onLogin }) {
       onLogin(data.user);
     } catch (err) {
       setError(err.message);
+    } finally {
+      setBusy(false);
     }
   }
   return (
@@ -320,9 +343,9 @@ function AuthScreen({ onLogin }) {
           <label>显示名<input value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} /></label>
         )}
         <label>密码<input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required /></label>
-        <button className="primary" type="submit">{mode === 'register' ? '注册' : '登录'}</button>
+        <button className="primary" type="submit" disabled={busy}>{busy ? (mode === 'register' ? '注册中…' : '登录中…') : (mode === 'register' ? '注册' : '登录')}</button>
         {config.allowRegister && (
-          <button className="secondary" type="button" onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>
+          <button className="secondary" type="button" disabled={busy} onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>
             {mode === 'login' ? '没有账号，去注册' : '已有账号，去登录'}
           </button>
         )}
@@ -354,6 +377,8 @@ function useBooksSource(enabled = true) {
       return (own || list[0])?.id || 0;
     });
     setReady(true);
+    // 把最新账本列表交给调用方：编辑弹窗要靠它刷新自己的数据
+    return list;
   }
   useEffect(() => {
     if (!enabled) return;
@@ -485,9 +510,27 @@ function ImagePicker({ images, onChange, uploadPath = '/api/upload/image', disab
   );
 }
 
-// 共享/家庭账本用的简化表单：账户可留空，分类自己填（已有的会联想出来），必填付款人/收款人
-function SharedBillFields({ form, setForm, accounts, categories, showTime = true }) {
+// 共享/家庭账本用的简化表单：账户可留空，分类自己填（已有的会联想出来）。
+// 开了 AA 的账本必填付款人/收款人（要拿它算平摊），没开的可以留空，只记账
+function SharedBillFields({ form, setForm, accounts, categories, participants = [], showTime = true, requireMember = true }) {
   const names = [...new Set(categories.filter((c) => !c.archived && c.kind === form.type).map((c) => c.name))];
+  // 账本预设的参与人，付款人直接选，免得同一个人打成两个名字、AA 算错
+  const people = [...new Set(participants.map((item) => (typeof item === 'string' ? item : item.name)).filter(Boolean))];
+  // 分摊人候选 = 预设名单 + 付款人自己（A 打车 A 自己也坐车，默认也要摊一份）
+  const options = [...new Set([...people, ...(form.memberName ? [form.memberName.trim()] : [])])].filter(Boolean);
+  // 没设过就默认全选；空数组 = 这笔不分摊给别人（请客 / 自己承担）
+  const picked = Array.isArray(form.shareWith) ? form.shareWith : options;
+  function toggleShare(name, on) {
+    const next = on
+      ? [...new Set([...picked, name])]
+      : picked.filter((item) => item !== name);
+    setForm({ ...form, shareWith: next });
+  }
+  function addPayerToShare(value) {
+    const name = String(value || '').trim();
+    if (!name || picked.includes(name)) return;
+    setForm({ ...form, shareWith: [...picked, name] });
+  }
   return (
     <div className="form-row wrap">
       <label>收支
@@ -498,7 +541,17 @@ function SharedBillFields({ form, setForm, accounts, categories, showTime = true
       <label>金额<input value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required /></label>
       {showTime && <label>时间<input type="datetime-local" value={form.occurredAt} onChange={(e) => setForm({ ...form, occurredAt: e.target.value })} /></label>}
       <label>{form.type === 'income' ? '收款人' : '付款人'}
-        <input value={form.memberName} onChange={(e) => setForm({ ...form, memberName: e.target.value })} placeholder="谁付的 / 谁收的" required />
+        <input
+          list="book-participant-options"
+          value={form.memberName}
+          onChange={(e) => setForm({ ...form, memberName: e.target.value })}
+          onBlur={(e) => addPayerToShare(e.target.value)}
+          placeholder={requireMember ? '谁付的 / 谁收的' : '可留空'}
+          required={requireMember}
+        />
+        <datalist id="book-participant-options">
+          {people.map((name) => <option key={name} value={name} />)}
+        </datalist>
       </label>
       <label>分类
         <input
@@ -517,6 +570,24 @@ function SharedBillFields({ form, setForm, accounts, categories, showTime = true
           {accounts.filter((a) => !a.archived).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </select>
       </label>
+      {requireMember && (
+        <div className="field-full">
+          <span className="tiny muted">分摊人员（一个都不勾 = 这笔自己承担）</span>
+          <div className="checks share-picks">
+            {options.map((name) => (
+              <label key={name}>
+                <input
+                  type="checkbox"
+                  checked={picked.includes(name)}
+                  onChange={(e) => toggleShare(name, e.target.checked)}
+                />
+                {name}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+      <label className="field-full">标题 / 对方<input value={form.payee} onChange={(e) => setForm({ ...form, payee: e.target.value })} placeholder="账单列表里显示的标题" /></label>
       <label className="field-full">备注<textarea value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} /></label>
       <div className="field-full">
         <span className="tiny muted">图片（选完自动传图床，最多 9 张）</span>
@@ -617,9 +688,9 @@ const BILL_SORTS = [
 async function fetchExport(format, query = '') {
   const params = new URLSearchParams(String(query).replace(/^\?/, ''));
   params.set('format', format);
-  const response = await fetch(`/api/export?${params}`, {
+  const response = await track(fetch(`/api/export?${params}`, {
     headers: { Authorization: `Bearer ${getToken()}` },
-  });
+  }));
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
     throw new Error(data.message || '导出失败');
@@ -709,6 +780,7 @@ function BillDetail({ tx, onClose, onDelete, onSave }) {
   const [form, setForm] = useState(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   useEffect(() => {
     function onKey(event) {
       if (event.key === 'Escape') onClose();
@@ -729,6 +801,10 @@ function BillDetail({ tx, onClose, onDelete, onSave }) {
     ['账户', accountLine(tx)],
     ['分类', tx.categoryName || tx.categoryLabel],
     [tx.type === 'income' ? '收款人' : '付款人', tx.memberName],
+    // 分摊人：没设过就是按账本参与人平分，空数组 = 这笔自己承担
+    ...(bookAaOn(books.books.find((item) => item.id === tx.bookId))
+      ? [['分摊', Array.isArray(tx.shareWith) ? (tx.shareWith.length ? tx.shareWith.join('、') : '自己承担') : '全员平摊']]
+      : []),
     ['对方', tx.payee],
     ['备注', tx.note],
     ['来源', SOURCES[tx.source] || tx.source],
@@ -748,6 +824,8 @@ function BillDetail({ tx, onClose, onDelete, onSave }) {
       memberName: tx.memberName || '',
       payee: tx.payee || '',
       note: tx.note || '',
+      // 老账单是 null（全员平分），交给表单默认全选；空数组 = 自己承担
+      shareWith: Array.isArray(tx.shareWith) ? tx.shareWith : undefined,
     });
     setEditing(true);
   }
@@ -789,7 +867,14 @@ function BillDetail({ tx, onClose, onDelete, onSave }) {
           <form className="stack" onSubmit={save}>
             <h2 id="bill-title">编辑账单</h2>
             {books.books.find((book) => book.id === tx.bookId)?.kind !== 'personal' && tx.bookId ? (
-              <SharedBillFields form={form} setForm={setForm} accounts={books.accounts} categories={books.categories} />
+              <SharedBillFields
+                form={form}
+                setForm={setForm}
+                accounts={books.accounts}
+                categories={books.categories}
+                participants={bookPeopleNames(books.books.find((book) => book.id === tx.bookId))}
+                requireMember={bookAaOn(books.books.find((book) => book.id === tx.bookId))}
+              />
             ) : (
               <BookFields form={form} setForm={setForm} accounts={books.accounts} categories={books.categories} />
             )}
@@ -822,7 +907,21 @@ function BillDetail({ tx, onClose, onDelete, onSave }) {
             )}
             <div className="modal-actions">
               <button className="secondary" type="button" onClick={onClose}>关闭</button>
-              <button className="danger" type="button" onClick={() => onDelete(tx.id)}>删除</button>
+              <button
+                className="danger"
+                type="button"
+                disabled={deleting}
+                onClick={async () => {
+                  setDeleting(true);
+                  try {
+                    await onDelete(tx.id);
+                  } finally {
+                    setDeleting(false);
+                  }
+                }}
+              >
+                {deleting ? '删除中…' : '删除'}
+              </button>
               <button className="primary" type="button" onClick={startEdit}>编辑</button>
             </div>
           </>
@@ -1015,6 +1114,31 @@ function CategoryPie({ items, activeName, onPick, kind = 'expense' }) {
   );
 }
 
+// 点饼图扇区后展开的账单明细，分类饼图和人员饼图共用
+function PieBillList({ bills, emptyText, onOpen }) {
+  return (
+    <div className="ledger">
+      {bills.map((tx) => {
+        const flag = billFlag(tx);
+        return (
+          <button className="tx-row" type="button" key={tx.id} onClick={() => onOpen(tx)}>
+            <span className={`tx-mark ${tx.type}`}>{typeLabel(tx.type).slice(0, 1)}</span>
+            <span className="tx-main">
+              <span className="tx-title">{billTitle(tx)}</span>
+              <span className="tiny muted">{[formatWhen(tx.occurredAt), tx.memberName, tx.categoryName, accountLine(tx)].filter(Boolean).join(' · ')}</span>
+            </span>
+            <span className="tx-side">
+              {flag && <span className={`tx-flag ${flag.kind}`}>{flag.label}</span>}
+              <span className={`tx-amount ${tx.type}`}>{signedMoney(tx)}</span>
+            </span>
+          </button>
+        );
+      })}
+      {bills.length === 0 && <p className="muted">{emptyText}</p>}
+    </div>
+  );
+}
+
 function Overview() {
   const { saved, bump } = useRefresh();
   const books = useBooks();
@@ -1025,12 +1149,18 @@ function Overview() {
   const [recent, setRecent] = useState([]);
   const [range, setRange] = useState('month');
   const [trend, setTrend] = useState(null);
-  const [trendMode, setTrendMode] = useState('line');
+  // 汇总默认先看饼图，折线留着但不再是默认
+  const [trendMode, setTrendMode] = useState('pie');
   const [piePick, setPiePick] = useState(null);
   const [pieBills, setPieBills] = useState([]);
   // 饼图分支出、收入两套，各自列出所有分类
   const [pieKind, setPieKind] = useState('expense');
   const [pieOpen, setPieOpen] = useState(null);
+  // 人员汇总饼图：出游/家庭账本里按付款人统计，同样分支出、收入两套
+  const [memberKind, setMemberKind] = useState('expense');
+  const [memberPick, setMemberPick] = useState(null);
+  const [memberBills, setMemberBills] = useState([]);
+  const [memberOpen, setMemberOpen] = useState(null);
   const [openTx, setOpenTx] = useState(null);
   const monthStart = useMemo(() => localDate(new Date(now.getFullYear(), now.getMonth(), 1)), []);
   const monthEnd = useMemo(() => localDate(new Date(now.getFullYear(), now.getMonth() + 1, 0)), []);
@@ -1043,14 +1173,58 @@ function Overview() {
   useEffect(() => {
     api(`/api/trend?from=${win.from}&to=${win.to}&${bookQuery}`).then(setTrend).catch(() => setTrend(null));
   }, [win.from, win.to, saved, bookQuery]);
+  // 共享/出游账本默认看「全部」（旅行就那几天，按月切很容易是空白），个人账本还是看当月
+  useEffect(() => {
+    const kind = books.currentBook?.kind;
+    setRange(kind && kind !== 'personal' ? 'all' : 'month');
+  }, [books.currentBook?.id]);
   function shift(delta) {
     const d = new Date(cursor.year, cursor.month - 1 + delta, 1);
     setCursor({ year: d.getFullYear(), month: d.getMonth() + 1 });
     setPiePick(null);
+    setMemberPick(null);
   }
+  const bookSuffix = bookQuery ? `&${bookQuery}` : '';
   // ids 为空表示「未分类」，后端用 none 匹配没有分类的账单
   const pieItems = pieKind === 'income' ? (summary?.incomeCategories || []) : (summary?.categories || []);
-  const pieQuery = (ids) => `/api/transactions?from=${win.from}&to=${win.to}&type=${pieKind}&categoryIds=${ids?.length ? ids.join(',') : 'none'}`;
+  // 有 category_id 就按 id 筛；手填分类只有文本（ids 为空），改用分类名筛
+  const pieQuery = (item) => {
+    const ids = item?.ids || [];
+    let filter = 'categoryIds=none';
+    if (ids.length) filter = `categoryIds=${ids.join(',')}`;
+    else if (item?.name && item.name !== '未分类') filter = `categoryLabel=${encodeURIComponent(item.name)}`;
+    return `/api/transactions?from=${win.from}&to=${win.to}&type=${pieKind}&${filter}${bookSuffix}`;
+  };
+  // 人员汇总：只要有带名字的 member_name 就显示，不再限制账本类型
+  const allRealMembers = [
+    ...(summary?.members || []),
+    ...(summary?.incomeMembers || []),
+  ].filter((item) => item.name !== '未填');
+  const hasRealMembers = allRealMembers.length > 0;
+  const memberItems = (memberKind === 'income' ? (summary?.incomeMembers || []) : (summary?.members || [])).filter((item) => item.name !== '未填');
+  const memberQuery = (name) => `/api/transactions?from=${win.from}&to=${win.to}&type=${memberKind}&memberName=${encodeURIComponent(name)}${bookSuffix}`;
+  // AA 平摊：两个人以上才谈得上平摊；开了 AA 的账本自己则总是显示，方便看完再补付款人
+  const isAaBook = bookAaOn(books.currentBook);
+  const aa = summary?.aa && (summary.aa.memberCount >= 2 || isAaBook) ? summary.aa : null;
+  function switchMemberKind(value) {
+    setMemberKind(value);
+    setMemberPick(null);
+  }
+  function pickMember(item) {
+    if (memberPick?.name === item.name) {
+      setMemberPick(null);
+      return;
+    }
+    setMemberPick(item);
+    api(memberQuery(item.name)).then((data) => setMemberBills(data.transactions));
+  }
+  async function removeMemberBill(id) {
+    await api(`/api/transactions/${id}`, { method: 'DELETE' });
+    setMemberOpen(null);
+    const data = await api(memberQuery(memberPick.name));
+    setMemberBills(data.transactions);
+    bump();
+  }
   function switchPieKind(value) {
     setPieKind(value);
     setPiePick(null);
@@ -1061,15 +1235,26 @@ function Overview() {
       return;
     }
     setPiePick(item);
-    api(pieQuery(item.ids)).then((data) => setPieBills(data.transactions));
+    api(pieQuery(item)).then((data) => setPieBills(data.transactions));
   }
   async function removePieBill(id) {
     await api(`/api/transactions/${id}`, { method: 'DELETE' });
     setPieOpen(null);
-    const data = await api(pieQuery(piePick.ids));
+    const data = await api(pieQuery(piePick));
     setPieBills(data.transactions);
     bump();
   }
+  // 时间范围或账本变了就收起明细，避免列表停留在旧区间
+  useEffect(() => {
+    setPiePick(null);
+    setMemberPick(null);
+  }, [win.from, win.to, bookQuery]);
+  // 账单有增删改时（saved 变化），展开中的饼图明细跟着刷新
+  useEffect(() => {
+    if (!piePick && !memberPick) return;
+    if (piePick) api(pieQuery(piePick)).then((data) => setPieBills(data.transactions)).catch(() => {});
+    if (memberPick) api(memberQuery(memberPick.name)).then((data) => setMemberBills(data.transactions)).catch(() => {});
+  }, [saved]);
   const max = Math.max(...(pieItems.map((c) => Number(c.amount)) || [1]), 1);
   return (
     <>
@@ -1085,7 +1270,7 @@ function Overview() {
                 key={value}
                 type="button"
                 className={range === value ? 'active' : ''}
-                onClick={() => { setRange(value); setPiePick(null); }}
+                onClick={() => { setRange(value); setPiePick(null); setMemberPick(null); }}
               >
                 {label}
               </button>
@@ -1122,6 +1307,50 @@ function Overview() {
           </div>
         </div>
       </section>
+      {aa && (
+        <section className="card trend-card">
+          <div className="card-head">
+            <h2>AA 平摊</h2>
+            <span className="tiny muted">总花费 {money(aa.total)} · {aa.memberCount} 人分摊</span>
+          </div>
+          <table className="aa-table">
+            <thead>
+              <tr><th>成员</th><th>已付</th><th>应摊</th><th>差额</th></tr>
+            </thead>
+            <tbody>
+              {aa.members.map((item) => {
+                const diff = Number(item.diff);
+                return (
+                  <tr key={item.name}>
+                    <td>{item.name}</td>
+                    <td>{money(item.paid)}</td>
+                    <td>{money(item.share)}</td>
+                    <td className={diff > 0 ? 'income' : diff < 0 ? 'expense' : 'muted'}>
+                      {diff > 0 ? `应收 ${money(item.diff)}` : diff < 0 ? `应付 ${money(-diff)}` : '已平'}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {aa.transfers.length > 0 && (
+            <div className="aa-transfers">
+              <h3>结算建议</h3>
+              <ul>
+                {aa.transfers.map((item) => (
+                  <li key={`${item.from}-${item.to}-${item.amount}`}>
+                    <b>{item.from}</b> 转给 <b>{item.to}</b> <span>{money(item.amount)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {Number(aa.unassigned) !== 0 && (
+            <p className="tiny muted">还有 {money(aa.unassigned)} 没填付款人，也一起算进平摊了。</p>
+          )}
+          {aaSelfNote(aa) && <p className="tiny muted">{aaSelfNote(aa)}</p>}
+        </section>
+      )}
       <section className="card trend-card">
         <div className="card-head">
           <h2>{trendMode === 'line' ? '收支走势' : `${pieKind === 'income' ? '收入' : '支出'}分类占比`}</h2>
@@ -1163,30 +1392,42 @@ function Overview() {
                   <h2>{piePick.name} · {pieBills.length} 笔</h2>
                   <button className="secondary small" type="button" onClick={() => setPiePick(null)}>收起</button>
                 </div>
-                <div className="ledger">
-                  {pieBills.map((tx) => {
-                    const flag = billFlag(tx);
-                    return (
-                      <button className="tx-row" type="button" key={tx.id} onClick={() => setPieOpen(tx)}>
-                        <span className={`tx-mark ${tx.type}`}>{typeLabel(tx.type).slice(0, 1)}</span>
-                        <span className="tx-main">
-                          <span className="tx-title">{billTitle(tx)}</span>
-                          <span className="tiny muted">{[formatWhen(tx.occurredAt), tx.categoryName, accountLine(tx)].filter(Boolean).join(' · ')}</span>
-                        </span>
-                        <span className="tx-side">
-                          {flag && <span className={`tx-flag ${flag.kind}`}>{flag.label}</span>}
-                          <span className={`tx-amount ${tx.type}`}>{signedMoney(tx)}</span>
-                        </span>
-                      </button>
-                    );
-                  })}
-                  {pieBills.length === 0 && <p className="muted">这个分类下没有账单。</p>}
-                </div>
+                <PieBillList bills={pieBills} emptyText="这个分类下没有账单。" onOpen={setPieOpen} />
               </div>
             )}
           </>
         )}
       </section>
+      {hasRealMembers && (
+        <section className="card trend-card">
+          <div className="card-head">
+            <h2>{`${memberKind === 'income' ? '收入' : '支出'}人员占比`}</h2>
+          </div>
+          <div className="segment kind-switch" role="tablist" aria-label="人员饼图收支">
+            {[['expense', '支出'], ['income', '收入']].map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                data-kind={value}
+                className={memberKind === value ? 'active' : ''}
+                onClick={() => switchMemberKind(value)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <CategoryPie items={memberItems} activeName={memberPick?.name} onPick={pickMember} kind={memberKind} />
+          {memberPick && (
+            <div className="pie-bills">
+              <div className="tree-head">
+                <h2>{memberPick.name} · {memberBills.length} 笔</h2>
+                <button className="secondary small" type="button" onClick={() => setMemberPick(null)}>收起</button>
+              </div>
+              <PieBillList bills={memberBills} emptyText="这个成员下没有账单。" onOpen={setMemberOpen} />
+            </div>
+          )}
+        </section>
+      )}
       {pieOpen && (
         <BillDetail
           tx={pieOpen}
@@ -1194,9 +1435,22 @@ function Overview() {
           onDelete={removePieBill}
           onSave={async () => {
             setPieOpen(null);
-            const data = await api(pieQuery(piePick?.ids));
+            const data = await api(pieQuery(piePick));
             setPieBills(data.transactions);
-            setSaved((n) => n + 1);
+            bump();
+          }}
+        />
+      )}
+      {memberOpen && (
+        <BillDetail
+          tx={memberOpen}
+          onClose={() => setMemberOpen(null)}
+          onDelete={removeMemberBill}
+          onSave={async () => {
+            setMemberOpen(null);
+            const data = await api(memberQuery(memberPick?.name));
+            setMemberBills(data.transactions);
+            bump();
           }}
         />
       )}
@@ -1912,6 +2166,10 @@ const MAP_FIELDS = [
   ['toAccount', '转入账户'],
   ['payee', '对方'],
   ['note', '备注'],
+  // 出游/家庭账本的「付款人」，导入后记在这笔账单的成员上
+  ['member', '付款人'],
+  // 分摊人：这笔摊给谁，留空 = 按账本参与人平分，写「自己」= 请客不算 AA
+  ['share', '分摊人'],
   ['externalId', '单号'],
 ];
 
@@ -2098,6 +2356,14 @@ function ImportPage() {
   // 银行卡流水才需要区分第三方支付：认来源，也认内容里有没有微信/支付宝/京东字样
   const hasBankFile = parsed.some((file) => file.source === 'cmb')
     || channelCounts.wechat + channelCounts.alipay + channelCounts.jd > 0;
+  // 出游账本表格才有付款人，普通账单没这一列就不显示，省得占宽度
+  const hasMemberFile = rows.some((row) => row.memberName);
+  // 分摊人同理：只有表里带了这一列才显示
+  const hasShareFile = rows.some((row) => Array.isArray(row.shareWith));
+  const shareText = (row) => {
+    if (!Array.isArray(row.shareWith)) return '';
+    return row.shareWith.length ? row.shareWith.join('、') : '自己承担';
+  };
   function matchesPay(row, value) {
     if (!value) return true;
     if (value === BANK_CHANNEL) return BANK_CHANNEL_RE.test(row.accountName || '');
@@ -2154,7 +2420,8 @@ function ImportPage() {
     const queued = replacePending ? nextPending : [...pending.slice(1), ...nextPending];
     setParsed(merged);
     setPending(queued);
-    setMapping(queued[0]?.suggested || {});
+    // 出游账本这类表格没有「收/支」列，默认按支出解析，解析页里还能改
+    setMapping({ defaultType: 'expense', ...(queued[0]?.suggested || {}) });
     const flat = merged.flatMap((file) => file.rows || []);
     setPicked(Object.fromEntries(flat.map((row, index) => [index, !row.skipReason])));
     setPayFilter('');
@@ -2193,6 +2460,25 @@ function ImportPage() {
     }
   }
 
+  async function downloadTemplate(kind) {
+    setError('');
+    try {
+      const response = await fetch(`/api/import/template?kind=${kind}`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!response.ok) throw new Error('模板下载失败');
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = kind === 'travel' ? '出游账本导入模板.xlsx' : '账单导入模板.xlsx';
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   const mappingFile = pending[0];
   return (
     <>
@@ -2222,6 +2508,11 @@ function ImportPage() {
         {files.length > 0 && <p className="muted">已选 {files.length} 个文件：{files.map((file) => file.name).join('、')}</p>}
         {parsing && <p className="loading">正在解析账单…</p>}
         <button className="primary" type="submit" disabled={!files.length || parsing}>{parsing ? '解析中…' : '解析账单'}</button>
+        <div className="row">
+          <button className="secondary" type="button" onClick={() => downloadTemplate('travel')}>下载出游账本模板</button>
+          <button className="secondary" type="button" onClick={() => downloadTemplate('custom')}>下载通用账单模板</button>
+          <span className="muted">出游模板带「付款人」「分摊人」列：分摊人留空 = 按账本参与人平分，写「自己」= 这笔请客不算 AA。</span>
+        </div>
       </form>
       {mappingFile && (
         <form className="card stack" style={{ marginTop: 12 }} onSubmit={(e) => { e.preventDefault(); parseUploads([mappingFile.file], mapping, false).catch((err) => setError(err.message)); }}>
@@ -2237,6 +2528,12 @@ function ImportPage() {
               </label>
             ))}
           </div>
+          <label>没有「收/支」列时全部记为
+            <select value={mapping.defaultType || 'expense'} onChange={(e) => setMapping({ ...mapping, defaultType: e.target.value })}>
+              <option value="expense">支出</option>
+              <option value="income">收入</option>
+            </select>
+          </label>
           {parsing && <p className="loading">正在按映射解析…</p>}
           <button className="primary" type="submit" disabled={parsing}>{parsing ? '解析中…' : '按映射解析'}</button>
         </form>
@@ -2308,7 +2605,7 @@ function ImportPage() {
           </div>
           <div className="preview">
             <table>
-              <thead><tr><th></th><th>文件</th><th>时间</th><th>类型</th><th>金额</th><th>对方</th><th>支付方式</th>{hasBankFile && <th>渠道</th>}<th>说明</th></tr></thead>
+              <thead><tr><th></th><th>文件</th><th>时间</th><th>类型</th><th>金额</th>{hasMemberFile && <th>付款人</th>}{hasShareFile && <th>分摊人</th>}<th>对方</th><th>支付方式</th>{hasBankFile && <th>渠道</th>}<th>说明</th></tr></thead>
               <tbody>
                 {visibleRows.map((row, index) => {
                   const rowIndex = visibleIndexes[index];
@@ -2319,10 +2616,12 @@ function ImportPage() {
                       <td>{row.occurredAt}</td>
                       <td>{TYPES.find((item) => item[0] === row.type)?.[1] || ''}</td>
                       <td>{row.amount}</td>
+                      {hasMemberFile && <td>{row.memberName}</td>}
+                      {hasShareFile && <td>{shareText(row)}</td>}
                       <td>{row.payee}</td>
                       <td>{row.accountName}</td>
                       {hasBankFile && <td>{CHANNEL_LABELS[thirdPartyChannel(row) || 'none']}</td>}
-                      <td className="muted clip wide">{row.skipReason || row.note || row.categoryName}</td>
+                      <td className="muted clip wide">{row.skipReason || row.note || row.categoryName || row.categoryLabel}</td>
                     </tr>
                   );
                 })}
@@ -3233,13 +3532,272 @@ function UsersPage() {
 const BOOK_KIND_OPTIONS = [
   ['travel', '出游共享'],
   ['family', '家庭'],
+  ['aa', 'AA'],
 ];
+
+// 参与人 = 预设名单 + 账单里付过款/收过款的人。AA 平摊名单、付款人下拉都取这个合集，
+// 免得「付过钱但没预设」或「只收过退款」的人被当成没参与
+function bookPeopleNames(book) {
+  if (!book) return [];
+  const names = [];
+  const push = (name) => {
+    const value = String(name || '').trim();
+    if (value && !names.includes(value)) names.push(value);
+  };
+  (book.participants || []).forEach((item) => push(typeof item === 'string' ? item : item.name));
+  (book.billPeople || []).forEach((item) => push(typeof item === 'string' ? item : item.name));
+  return names;
+}
+
+// 这个账本要不要算 AA：AA 类型天生算，出游/家庭看开关
+function bookAaOn(book) {
+  return !!book && (book.kind === 'aa' || !!book.aaEnabled);
+}
+
+// 账本编辑弹窗：改名/改类型、管参与人和协作成员、开关分享、归档、删除
+function BookEditModal({ book, onClose, onChanged }) {
+  const [name, setName] = useState(book.name);
+  const [kind, setKind] = useState(book.kind);
+  const [person, setPerson] = useState('');
+  const [username, setUsername] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [confirm, setConfirm] = useState(null);
+  const personal = book.kind === 'personal';
+  // 参与人 = 预设 + 账单里付过款/收过款的人，一起展示，来源标清楚
+  const people = bookPeopleNames(book);
+  const presetIds = new Map((book.participants || []).map((item) => [item.name, item.id]));
+  const billPeople = new Map((book.billPeople || []).map((item) => [item.name, item]));
+  const link = `${window.location.origin}/share/${book.shareToken}`;
+  // AA 开关：出游/家庭账本可以只记账不算账；AA 类型天生就是开的
+  const [aaEnabled, setAaEnabled] = useState(!!book.aaEnabled);
+  useEffect(() => { setAaEnabled(!!book.aaEnabled); }, [book.aaEnabled]);
+
+  useEffect(() => {
+    function onKey(event) {
+      if (event.key === 'Escape') onClose();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  async function act(action) {
+    setError('');
+    setBusy(true);
+    try {
+      await action();
+      await onChanged();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function save(event) {
+    event.preventDefault();
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    act(() => api(`/api/books/${book.id}`, { method: 'PATCH', body: { name: trimmed, kind } }));
+  }
+
+  // 开关 AA：开了才有参与人和平摊，关了就只记账
+  function toggleAa(next) {
+    setAaEnabled(next);
+    act(() => api(`/api/books/${book.id}`, { method: 'PATCH', body: { aaEnabled: next } }));
+  }
+
+  function addPerson(event) {
+    event.preventDefault();
+    const value = person.trim();
+    if (!value) return;
+    act(async () => {
+      await api(`/api/books/${book.id}/participants`, { method: 'POST', body: { name: value } });
+      setPerson('');
+    });
+  }
+
+  function addMember(event) {
+    event.preventDefault();
+    const value = username.trim();
+    if (!value) return;
+    act(async () => {
+      await api(`/api/books/${book.id}/members`, { method: 'POST', body: { username: value } });
+      setUsername('');
+    });
+  }
+
+  function copyLink() {
+    navigator.clipboard?.writeText(link);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+
+  function destroy() {
+    setConfirm({
+      title: `删除「${book.name}」？`,
+      body: '如果这个账本里已经有账单，只会归档（账单保留）；没账单才会真删。',
+      confirmLabel: '删除',
+      onConfirm: async () => {
+        setConfirm(null);
+        const result = await api(`/api/books/${book.id}`, { method: 'DELETE' });
+        await onChanged();
+        if (result.deleted) onClose();
+      },
+    });
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal modal-wide stack" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+        <h2>编辑账本</h2>
+        {error && <div className="error">{error}</div>}
+        <form className="form-row wrap" onSubmit={save}>
+          <label>名称<input value={name} onChange={(e) => setName(e.target.value)} required /></label>
+          <label>类型
+            <select value={kind} onChange={(e) => setKind(e.target.value)} disabled={personal}>
+              {personal
+                ? <option value="personal">个人</option>
+                : BOOK_KIND_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </label>
+          <button className="primary" type="submit" disabled={busy}>保存</button>
+        </form>
+        {!personal && (
+          <label className="book-aa-toggle">
+            <input
+              type="checkbox"
+              checked={aaEnabled || kind === 'aa'}
+              disabled={busy || kind === 'aa'}
+              onChange={(e) => toggleAa(e.target.checked)}
+            />
+            <span>
+              开启 AA 平摊
+              <b className="muted">{kind === 'aa' ? '（AA 账本默认开启）' : '（关掉只记账，不算平摊）'}</b>
+            </span>
+          </label>
+        )}
+        {!personal && aaEnabled && (
+          <div className="book-section">
+            <span className="book-section-title">参与人（AA / 平摊的人）</span>
+            <div className="book-members">
+              {people.map((name) => {
+                const id = presetIds.get(name);
+                const bill = billPeople.get(name);
+                const source = id !== undefined
+                  ? '预设'
+                  : [bill?.expense ? '付款' : '', bill?.income ? '收入' : ''].filter(Boolean).join('·');
+                return (
+                  <span className="cat-chip" key={name}>
+                    <b>{name}</b>
+                    {source && <span className="tiny muted">{source}</span>}
+                    {id !== undefined && (
+                      <button
+                        type="button"
+                        className="chip-btn danger"
+                        title="移除预设（账单里的记录不会删）"
+                        disabled={busy}
+                        onClick={() => act(() => api(`/api/books/${book.id}/participants/${id}`, { method: 'DELETE' }))}
+                      >✕</button>
+                    )}
+                  </span>
+                );
+              })}
+              {people.length === 0 && <span className="tiny muted">还没设参与人</span>}
+            </div>
+            <form className="book-add-member" onSubmit={addPerson}>
+              <input value={person} onChange={(e) => setPerson(e.target.value)} placeholder="名字，比如 老王" />
+              <button className="secondary small" type="submit" disabled={busy}>添加</button>
+            </form>
+            <p className="tiny muted">
+              参与人 = 预设的人 + 账单里付过款/收过款的人，都会被算进 AA 平摊。预设了人，没垫钱的也会摊到他头上。
+            </p>
+          </div>
+        )}
+        {!personal && (
+          <div className="book-section">
+            <span className="book-section-title">协作成员（有登录账号）</span>
+            <div className="book-members">
+              {book.members.map((member) => (
+                <span className="cat-chip" key={member.id}>
+                  <b>{member.name}</b>
+                  {member.role === 'owner' ? <span className="tiny muted">所有者</span> : (
+                    <button
+                      type="button"
+                      className="chip-btn danger"
+                      title="移除"
+                      disabled={busy}
+                      onClick={() => act(() => api(`/api/books/${book.id}/members/${member.id}`, { method: 'DELETE' }))}
+                    >✕</button>
+                  )}
+                </span>
+              ))}
+            </div>
+            <form className="book-add-member" onSubmit={addMember}>
+              <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="用户名，加进来一起记" />
+              <button className="secondary small" type="submit" disabled={busy}>加成员</button>
+            </form>
+            <p className="tiny muted">协作成员登录后能看到这个账本、在里面记账，跟参与人是两回事。</p>
+          </div>
+        )}
+        {!personal && (
+          <div className="book-section">
+            <span className="book-section-title">分享链接</span>
+            <div className="book-actions">
+              <button
+                className="secondary small"
+                type="button"
+                disabled={busy}
+                onClick={() => act(() => api(`/api/books/${book.id}/share`, { method: 'POST', body: { enabled: !book.shareEnabled } }))}
+              >
+                {book.shareEnabled ? '关闭分享链接' : '开启分享链接'}
+              </button>
+              {book.shareEnabled && (
+                <button className="ghost small" type="button" onClick={copyLink}>{copied ? '已复制' : '复制链接'}</button>
+              )}
+            </div>
+            {book.shareEnabled && <p className="book-link">免登录链接：{link}</p>}
+          </div>
+        )}
+        <div className="book-actions">
+          {!personal && (
+            <button
+              className="secondary small"
+              type="button"
+              disabled={busy}
+              onClick={() => act(() => api(`/api/books/${book.id}`, { method: 'PATCH', body: { archived: !book.archived } }))}
+            >
+              {book.archived ? '取消归档' : '归档'}
+            </button>
+          )}
+          <span className="spacer" />
+          {!personal && (
+            <button className="ghost danger-text small" type="button" onClick={destroy} disabled={busy}>删除</button>
+          )}
+          <button className="secondary" type="button" onClick={onClose}>关闭</button>
+        </div>
+      </div>
+      {confirm && (
+        <ConfirmModal
+          title={confirm.title}
+          body={confirm.body}
+          confirmLabel={confirm.confirmLabel}
+          onClose={() => setConfirm(null)}
+          onConfirm={confirm.onConfirm}
+        />
+      )}
+    </div>
+  );
+}
 
 function BooksPage() {
   const { books, currentBookId, setCurrentBookId, reload } = useBooks();
   const [name, setName] = useState('');
   const [kind, setKind] = useState('travel');
-  const [memberInput, setMemberInput] = useState({});
+  const [aa, setAa] = useState(true);
+  const [people, setPeople] = useState('');
+  const [editing, setEditing] = useState(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [confirm, setConfirm] = useState(null);
@@ -3256,20 +3814,29 @@ function BooksPage() {
     }
   }
 
+  // 编辑弹窗里加完参与人/成员要立刻看到：reload 拿到最新账本列表，把 editing 换成新对象
+  async function changed() {
+    const list = await reload();
+    setEditing((prev) => (prev ? (list.find((book) => book.id === prev.id) || prev) : null));
+  }
+
   function create(event) {
     event.preventDefault();
     const trimmed = name.trim();
     if (!trimmed) return;
-    run(
-      () => api('/api/books', { method: 'POST', body: { name: trimmed, kind } }),
-      (book) => { setName(''); return `已创建「${book.book.name}」`; },
-    );
-  }
-
-  function rename(book) {
-    const next = window.prompt('账本名', book.name);
-    if (!next || next.trim() === book.name) return;
-    run(() => api(`/api/books/${book.id}`, { method: 'PATCH', body: { name: next.trim() } }), () => '已改名');
+    // AA 账本天生开着；出游/家庭看勾选。关掉就只记账，不记参与人
+    const aaOn = kind === 'aa' || aa;
+    // 参与人一次填多个：逗号、空格、顿号都认
+    const names = aaOn ? people.split(/[,，、\s]+/).map((item) => item.trim()).filter(Boolean) : [];
+    run(async () => {
+      const result = await api('/api/books', { method: 'POST', body: { name: trimmed, kind, aaEnabled: aaOn } });
+      for (const person of names) {
+        await api(`/api/books/${result.book.id}/participants`, { method: 'POST', body: { name: person } });
+      }
+      setName('');
+      setPeople('');
+      return `已创建「${result.book.name}」${names.length ? `，参与人 ${names.join('、')}` : ''}`;
+    });
   }
 
   function toggleShare(book) {
@@ -3287,19 +3854,10 @@ function BooksPage() {
     setNotice(`链接已复制：${link}`);
   }
 
-  function addMember(book) {
-    const username = String(memberInput[book.id] || '').trim();
-    if (!username) return;
+  function toggleArchive(book) {
     run(
-      () => api(`/api/books/${book.id}/members`, { method: 'POST', body: { username } }),
-      () => { setMemberInput({ ...memberInput, [book.id]: '' }); return `已把 ${username} 加进「${book.name}」`; },
-    );
-  }
-
-  function removeMember(book, member) {
-    run(
-      () => api(`/api/books/${book.id}/members/${member.id}`, { method: 'DELETE' }),
-      () => `已移除 ${member.name}`,
+      () => api(`/api/books/${book.id}`, { method: 'PATCH', body: { archived: !book.archived } }),
+      () => (book.archived ? `「${book.name}」已取消归档` : `「${book.name}」已归档`),
     );
   }
 
@@ -3322,78 +3880,68 @@ function BooksPage() {
   const mine = books.filter((book) => book.role === 'owner' || book.role === 'member');
   const others = books.filter((book) => book.role !== 'owner' && book.role !== 'member');
 
-  function BookCard({ book }) {
+  function BookRow({ book }) {
     const manage = book.role === 'owner' || book.role === 'admin';
+    const personal = book.kind === 'personal';
+    const link = `${window.location.origin}/share/${book.shareToken}`;
     return (
-      <div className={`card book-card${book.id === currentBookId ? ' active' : ''}`}>
-        <div className="book-card-head">
-          <div className="book-title">
-            <b>{book.name}</b>
-            <span className="tag">{book.kindLabel}</span>
+      <tr className={book.id === currentBookId ? 'active' : ''}>
+        <td>
+          <div className="book-name-row">
+            <b className="book-name">{book.name}</b>
+            {book.id === currentBookId && <span className="tag current">当前</span>}
             {book.archived && <span className="tag">已归档</span>}
-          </div>
-          <div className="book-meta-row">
             {book.role !== 'owner' && <span className="tiny muted">所有者 {book.ownerName}</span>}
-            {book.id === currentBookId ? (
-              <span className="badge-current">当前账本</span>
-            ) : (
-              <button className="secondary small" type="button" onClick={() => setCurrentBookId(book.id)}>切到这个账本</button>
+            {book.id !== currentBookId && (
+              <button className="ghost tiny" type="button" onClick={() => setCurrentBookId(book.id)}>切换</button>
             )}
           </div>
-        </div>
-        {manage && book.kind !== 'personal' && (
-          <div className="book-section">
-            <span className="book-section-title">成员</span>
-            <div className="book-members">
-              {book.members.map((member) => (
-                <span className="cat-chip" key={member.id}>
-                  <b>{member.name}</b>
-                  {member.role === 'owner' ? <span className="tiny muted">所有者</span> : (
-                    <button type="button" className="chip-btn danger" title="移除" onClick={() => removeMember(book, member)}>✕</button>
-                  )}
-                </span>
-              ))}
-            </div>
-            <div className="book-add-member">
-              <input
-                value={memberInput[book.id] || ''}
-                onChange={(e) => setMemberInput({ ...memberInput, [book.id]: e.target.value })}
-                placeholder="用户名，加进来一起记"
-              />
-              <button className="secondary small" type="button" onClick={() => addMember(book)}>加成员</button>
-            </div>
+        </td>
+        <td><span className="tag">{book.kindLabel}</span></td>
+        <td>
+          <div className="book-people-line">
+            <span className="tiny muted">协作</span>
+            <span>{book.members.length ? book.members.map((member) => member.name).join('、') : '—'}</span>
           </div>
-        )}
-        {manage && book.kind !== 'personal' && (
-          <div className="book-section">
-            <span className="book-section-title">共享</span>
-            <div className="book-actions">
-              <button className="secondary small" type="button" onClick={() => toggleShare(book)}>
-                {book.shareEnabled ? '关闭分享' : '开启分享链接'}
-              </button>
-              {book.shareEnabled && (
-                <button className="ghost small" type="button" onClick={() => copyLink(book)}>复制链接</button>
-              )}
+          {!personal && (
+            <div className="book-people-line">
+              <span className="tiny muted">参与</span>
+              <span>{book.aaEnabled ? (bookPeopleNames(book).join('、') || '—') : '未开启 AA'}</span>
             </div>
-            {book.shareEnabled && (
-              <p className="book-link">
-                免登录链接：{window.location.origin}/share/{book.shareToken}
-              </p>
+          )}
+        </td>
+        <td>
+          {book.shareEnabled ? (
+            <button
+              className="ghost danger-text tiny"
+              type="button"
+              title={link}
+              onClick={() => copyLink(book)}
+              style={{ whiteSpace: 'nowrap' }}
+            >
+              复制链接
+            </button>
+          ) : (
+            <span className="muted">—</span>
+          )}
+        </td>
+        <td>
+          <div className="book-actions-row">
+            <button className="secondary tiny" type="button" onClick={() => setEditing(book)}>编辑</button>
+            {manage && !personal && (
+              <>
+                <button className="secondary tiny" type="button" onClick={() => toggleShare(book)}>
+                  {book.shareEnabled ? '关闭' : '开启'}
+                </button>
+                <button className="secondary tiny" type="button" onClick={() => toggleArchive(book)}>
+                  {book.archived ? '取消归档' : '归档'}
+                </button>
+                <button className="ghost danger-text tiny" type="button" onClick={() => removeBook(book)}>删除</button>
+              </>
             )}
           </div>
-        )}
-        {manage && (
-          <div className="book-actions">
-            <button className="secondary small" type="button" onClick={() => rename(book)}>改名</button>
-            <span className="spacer" />
-            {book.kind !== 'personal' && (
-              <button className="ghost danger-text small" type="button" onClick={() => removeBook(book)}>
-                {book.archived ? '彻底删除' : '归档'}
-              </button>
-            )}
-          </div>
-        )}
-      </div>
+        </td>
+      </tr>
     );
   }
 
@@ -3402,38 +3950,64 @@ function BooksPage() {
       <div className="page-head"><h1>账本</h1></div>
       {error && <div className="error" style={{ marginBottom: 12 }}>{error}</div>}
       {notice && <p className="muted" style={{ marginBottom: 12 }}>{notice}</p>}
-      <div className="split books-layout">
-        <section className="card">
-          <h2>新建账本</h2>
-          <form className="stack" onSubmit={create}>
+      <div className="books-layout">
+        <section className="card book-create">
+          <form className="form-row wrap" onSubmit={create}>
             <label>账本名<input value={name} onChange={(e) => setName(e.target.value)} placeholder="比如 泰国游、家里" required /></label>
             <label>类型
               <select value={kind} onChange={(e) => setKind(e.target.value)}>
                 {BOOK_KIND_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
             </label>
+            <label className="book-aa-toggle">
+              <input
+                type="checkbox"
+                checked={kind === 'aa' || aa}
+                disabled={kind === 'aa'}
+                onChange={(e) => setAa(e.target.checked)}
+              />
+              <span>开启 AA 平摊</span>
+            </label>
+            {(kind === 'aa' || aa) && (
+              <label>参与人（可留空）
+                <input value={people} onChange={(e) => setPeople(e.target.value)} placeholder="胡胡, 楠楠，逗号分隔" />
+              </label>
+            )}
             <button className="primary" type="submit">创建</button>
           </form>
-          <p className="muted" style={{ marginTop: 12 }}>
-            个人账本是你自己的，别人看不到；出游共享和家庭账本可以加成员，也能生成免登录链接让同伴补账。
+          <p className="tiny muted" style={{ marginTop: 8 }}>
+            协作成员 = 有登录账号的人；参与人 = AA/平摊名单，不用注册。不勾 AA 就只记账，不算谁该补给谁。
           </p>
         </section>
-        <section className="card">
+        <section className="card book-list-card">
           <h2>我的账本</h2>
-          <div className="cat-list">
-            {mine.map((book) => <BookCard key={book.id} book={book} />)}
-            {mine.length === 0 && <p className="muted">还没有账本。</p>}
-          </div>
+          <table className="book-table">
+            <thead>
+              <tr><th>名称</th><th>类型</th><th>成员</th><th>分享链接</th><th>操作</th></tr>
+            </thead>
+            <tbody>
+              {mine.map((book) => <BookRow key={book.id} book={book} />)}
+            </tbody>
+          </table>
+          {mine.length === 0 && <p className="muted">还没有账本。</p>}
           {others.length > 0 && (
             <>
               <h2 style={{ marginTop: 18 }}>其他人的账本（管理员可见）</h2>
-              <div className="cat-list">
-                {others.map((book) => <BookCard key={book.id} book={book} />)}
-              </div>
+              <table className="book-table">
+                <thead>
+                  <tr><th>名称</th><th>类型</th><th>成员</th><th>分享链接</th><th>操作</th></tr>
+                </thead>
+                <tbody>
+                  {others.map((book) => <BookRow key={book.id} book={book} />)}
+                </tbody>
+              </table>
             </>
           )}
         </section>
       </div>
+      {editing && (
+        <BookEditModal book={editing} onClose={() => setEditing(null)} onChanged={changed} />
+      )}
       {confirm && (
         <ConfirmModal
           title={confirm.title}
@@ -3444,6 +4018,120 @@ function BooksPage() {
         />
       )}
     </>
+  );
+}
+
+function pieArc(cx, cy, r, start, end) {
+  const large = end - start > Math.PI ? 1 : 0;
+  const x1 = cx + r * Math.cos(start);
+  const y1 = cy + r * Math.sin(start);
+  const x2 = cx + r * Math.cos(end);
+  const y2 = cy + r * Math.sin(end);
+  return `M ${cx} ${cy} L ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${x2.toFixed(2)} ${y2.toFixed(2)} Z`;
+}
+
+function SharePie({ expense, income }) {
+  const e = Number(expense || 0);
+  const i = Number(income || 0);
+  const total = e + i;
+  if (total <= 0) return <p className="muted">还没有收支。</p>;
+  const size = 180;
+  const cx = size / 2;
+  const cy = size / 2;
+  const r = 72;
+  const inner = 46;
+  const slices = [
+    { name: '支出', amount: e, color: '#ff4d6a' },
+    { name: '收入', amount: i, color: '#2ec4b6' },
+  ];
+  let angle = -Math.PI / 2;
+  const arcs = slices.map((slice) => {
+    const sweep = (slice.amount / total) * Math.PI * 2;
+    const start = angle;
+    const end = angle + sweep;
+    angle = end;
+    return { ...slice, sweep, d: pieArc(cx, cy, r, start, end) };
+  });
+  const net = i - e;
+  const chartArcs = arcs.filter((arc) => arc.amount > 0);
+  return (
+    <div className="share-pie">
+      <svg viewBox={`0 0 ${size} ${size}`} role="img" aria-label="总支出收入占比">
+        {chartArcs.map((arc) => (
+          <path key={arc.name} d={arc.d} fill={arc.color}>
+            <title>{`${arc.name} ${money(arc.amount)}`}</title>
+          </path>
+        ))}
+        <circle cx={cx} cy={cy} r={inner} fill="var(--card)" />
+        <text x={cx} y={cy - 2} className="share-pie-total" textAnchor="middle">{money(Math.abs(net))}</text>
+        <text x={cx} y={cy + 16} className="share-pie-label" textAnchor="middle">{net >= 0 ? '结余' : '净支出'}</text>
+      </svg>
+      <ul className="share-pie-legend">
+        {arcs.map((arc) => (
+          <li key={arc.name}>
+            <span className="dot" style={{ background: arc.color }} />
+            <span>{arc.name}</span>
+            <b>{money(arc.amount)}</b>
+            <em>{`${(arc.sweep / (Math.PI * 2) * 100).toFixed(1)}%`}</em>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+// 请客 / 自己承担的钱不进 AA，单独提示一句，免得以为漏算了
+function aaSelfNote(aa) {
+  const list = (aa?.members || []).filter((item) => Number(item.own) > 0);
+  if (!list.length) return null;
+  return `${list.map((item) => `${item.name} ${money(item.own)}`).join('、')} 是自己承担的（请客），没算进 AA。`;
+}
+
+function ShareAa({ aa }) {
+  if (!aa || aa.memberCount < 2) return null;
+  return (
+    <div className="share-aa">
+      <div className="card-head">
+        <h2>AA 平摊</h2>
+        <span className="tiny muted">总 {money(aa.total)} · {aa.memberCount} 人分摊</span>
+      </div>
+      <table className="aa-table">
+        <thead>
+          <tr><th>成员</th><th>已付</th><th>应摊</th><th>差额</th></tr>
+        </thead>
+        <tbody>
+          {aa.members.map((item) => {
+            const diff = Number(item.diff);
+            return (
+              <tr key={item.name}>
+                <td>{item.name}</td>
+                <td>{money(item.paid)}</td>
+                <td>{money(item.share)}</td>
+                <td className={diff > 0 ? 'income' : diff < 0 ? 'expense' : 'muted'}>
+                  {diff > 0 ? `应收 ${money(item.diff)}` : diff < 0 ? `应付 ${money(-diff)}` : '已平'}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {aa.transfers.length > 0 && (
+        <div className="aa-transfers">
+          <h3>结算建议</h3>
+          <ul>
+            {aa.transfers.map((item) => (
+              <li key={`${item.from}-${item.to}-${item.amount}`}>
+                <b>{item.from}</b> 转给 <b>{item.to}</b> <span>{money(item.amount)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {Number(aa.unassigned) !== 0 && (
+        <p className="tiny muted">还有 {money(aa.unassigned)} 没填付款人，也一起算进平摊了。</p>
+      )}
+      {aaSelfNote(aa) && <p className="tiny muted">{aaSelfNote(aa)}</p>}
+    </div>
   );
 }
 
@@ -3460,6 +4148,7 @@ function SharePage() {
     type: 'expense',
     amount: '',
     categoryLabel: '',
+    payee: '',
     note: '',
     occurredAt: nowLocal(),
     images: [],
@@ -3488,10 +4177,11 @@ function SharePage() {
         method: 'POST',
         body: {
           ...form,
+          shareWith: data?.book?.aaEnabled ? sharePicked : undefined,
           images: imageList(form.images),
         },
       });
-      setForm({ ...form, amount: '', categoryLabel: '', note: '', images: [] });
+      setForm({ ...form, amount: '', categoryLabel: '', payee: '', note: '', images: [], shareWith: null });
       setNotice('记好了，谢谢！');
       await load();
     } catch (err) {
@@ -3517,16 +4207,43 @@ function SharePage() {
     item.type === 'income' ? sum + Number(item.amount) : sum - Number(item.amount)
   ), 0);
 
+  const netAll = Number(data?.summary?.net || 0);
+  // 分摊人：账本预设名单 + 自己，默认全选；没坐车/请假的取消勾选
+  const shareOptions = [...new Set([
+    ...(data?.book?.participants || []),
+    ...(form.memberName ? [String(form.memberName).trim()] : []),
+  ])].filter(Boolean);
+  const sharePicked = Array.isArray(form.shareWith) ? form.shareWith : shareOptions;
+  function toggleShare(name, on) {
+    setForm({
+      ...form,
+      shareWith: on ? [...new Set([...sharePicked, name])] : sharePicked.filter((item) => item !== name),
+    });
+  }
   return (
     <div className="auth">
-      <div className="share-page stack">
-        <h1>{data ? data.book.name : '共享账本'}</h1>
-        <p className="muted">{data ? `${data.book.kindLabel} · 补账不用登录，填个名字就行` : '正在打开…'}</p>
-        {error && <div className="error">{error}</div>}
-        {notice && <p className="muted">{notice}</p>}
-        <form className="card stack" onSubmit={submit}>
+      <div className="share-page">
+        <header className="share-header">
+          <h1>{data ? data.book.name : '共享账本'}</h1>
+          <p className="muted">{data ? `${data.book.kindLabel} · 补账不用登录，填个名字就行` : '正在打开…'}</p>
+          {error && <div className="error">{error}</div>}
+          {notice && <p className="muted">{notice}</p>}
+        </header>
+
+        <form className="card stack share-form" onSubmit={submit}>
           <div className="form-row wrap">
-            <label>你的名字<input value={form.memberName} onChange={(e) => setForm({ ...form, memberName: e.target.value })} placeholder="小王" required /></label>
+            <label>你的名字
+              <input
+                list="share-participant-options"
+                value={form.memberName}
+                onChange={(e) => setForm({ ...form, memberName: e.target.value })}
+                placeholder="小王"
+                required
+              />
+              <datalist id="share-participant-options">
+                {(data?.book?.participants || []).map((name) => <option key={name} value={name} />)}
+              </datalist>
+            </label>
             <label>收支
               <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
                 {[['expense', '我付的'], ['income', '我收的']].map(([value, label]) => <option key={value} value={value}>{label}</option>)}
@@ -3535,10 +4252,30 @@ function SharePage() {
             <label>金额<input value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required /></label>
             <label>时间<input type="datetime-local" value={form.occurredAt} onChange={(e) => setForm({ ...form, occurredAt: e.target.value })} /></label>
             <label>分类<input value={form.categoryLabel} onChange={(e) => setForm({ ...form, categoryLabel: e.target.value })} placeholder="门票 / 吃饭…" /></label>
+            <label className="field-full">简述
+              <input value={form.payee} onChange={(e) => setForm({ ...form, payee: e.target.value })} placeholder="露营双层巴士竹签以及其他" />
+            </label>
+            {data?.book?.aaEnabled && shareOptions.length > 0 && (
+              <div className="field-full">
+                <span className="tiny muted">谁一起分摊（没坐车 / 请假的取消勾选；一个都不勾 = 这笔我自己承担）</span>
+                <div className="checks share-picks">
+                  {shareOptions.map((name) => (
+                    <label key={name}>
+                      <input
+                        type="checkbox"
+                        checked={sharePicked.includes(name)}
+                        onChange={(e) => toggleShare(name, e.target.checked)}
+                      />
+                      {name}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
           <label>备注<textarea value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} /></label>
           <div>
-            <span className="tiny muted">图片（选完自动传图床，最多 9 张）</span>
+            <span className="tiny muted">截图</span>
             <ImagePicker
               images={form.images}
               onChange={(images) => setForm({ ...form, images })}
@@ -3547,32 +4284,61 @@ function SharePage() {
           </div>
           <button className="primary" type="submit" disabled={saving}>{saving ? '保存中…' : '补一笔'}</button>
         </form>
-        <section className="card">
+
+        <aside className="share-side">
+          {data?.summary && (
+            <section className="card share-summary-card">
+              <div className="card-head">
+                <h2>总支出 / 收入</h2>
+                <span className="tiny muted">{data.entries.length} 笔</span>
+              </div>
+              <SharePie expense={data.summary.expense} income={data.summary.income} />
+              <div className="share-summary-nums">
+                <div><span className="muted">总支出</span><b className="expense">{money(data.summary.expense)}</b></div>
+                <div><span className="muted">总收入</span><b className="income">{money(data.summary.income)}</b></div>
+                <div><span className="muted">结余</span><b className={netAll >= 0 ? 'income' : 'expense'}>{money(data.summary.net)}</b></div>
+              </div>
+            </section>
+          )}
+          {data?.book?.aaEnabled && data?.aa?.memberCount >= 2 && (
+            <section className="card share-aa-card">
+              <ShareAa aa={data.aa} />
+            </section>
+          )}
+        </aside>
+
+        <section className="card share-list">
           <div className="tree-head">
             <h2>已记 {data?.entries.length || 0} 笔</h2>
             <b>{total.toFixed(2)} 元</b>
           </div>
           <div className="list">
-            {(data?.entries || []).map((item) => (
-              <div className="item" key={item.id}>
-                <div>
-                  <div>{item.memberName} · {item.categoryName || item.categoryLabel || '未分类'}</div>
-                  <div className="tiny muted">{formatWhen(item.occurredAt)}{item.note ? ` · ${item.note}` : ''}</div>
-                  {item.images?.length > 0 && (
-                    <div className="image-grid">
-                      {item.images.map((url) => (
-                        <a key={url} href={imageSrc(url)} target="_blank" rel="noreferrer">
-                          <img src={imageSrc(url)} alt="" />
-                        </a>
-                      ))}
-                    </div>
-                  )}
+            {(data?.entries || []).map((item) => {
+              // 标题跟账单列表一致：付款人 · 标题（标题 > 备注 > 分类兜底）
+              const title = billTitle(item);
+              const sub = [formatWhen(item.occurredAt), item.categoryName || item.categoryLabel, item.note]
+                .filter(Boolean).filter((text) => text !== title).join(' · ');
+              return (
+                <div className="item" key={item.id}>
+                  <div>
+                    <div>{[item.memberName, title].filter(Boolean).join(' · ')}</div>
+                    <div className="tiny muted">{sub}</div>
+                    {item.images?.length > 0 && (
+                      <div className="image-grid">
+                        {item.images.map((url) => (
+                          <a key={url} href={imageSrc(url)} target="_blank" rel="noreferrer">
+                            <img src={imageSrc(url)} alt="" />
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <b className={item.type === 'income' ? 'income' : 'expense'}>
+                    {item.type === 'income' ? '+' : '-'}{money(item.amount)}
+                  </b>
                 </div>
-                <b className={item.type === 'income' ? 'income' : 'expense'}>
-                  {item.type === 'income' ? '+' : '-'}{money(item.amount)}
-                </b>
-              </div>
-            ))}
+              );
+            })}
             {(data?.entries || []).length === 0 && <p className="muted">还没有人补账。</p>}
           </div>
         </section>
@@ -3602,6 +4368,7 @@ export function App() {
   }
   return (
     <RefreshContext.Provider value={{ saved, bump }}>
+      <BusyBar />
       <Shell user={user} onLogout={logout} onSaved={bump}>
         <Routes>
           <Route path="/" element={<Overview />} />
