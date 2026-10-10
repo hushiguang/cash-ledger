@@ -51,6 +51,20 @@ export function initialNextRun(rule) {
   return next;
 }
 
+// 规则被改动后重新排期：从 from 当天往后找下一次，不要把过去的日子再补一遍
+export function nextRunFrom(rule, from = todayString()) {
+  let next = firstOccurrence(scheduleOf(rule));
+  let guard = 0;
+  while (next && next < from && guard < 500) {
+    const step = advance(scheduleOf(rule), next);
+    if (!step || step <= next) break;
+    next = step;
+    guard += 1;
+  }
+  if (next && rule.endDate && next > rule.endDate) return null;
+  return next;
+}
+
 function insertOccurrence(rule, date) {
   const externalId = `r${rule.id}:${date}`;
   const exists = db.prepare(

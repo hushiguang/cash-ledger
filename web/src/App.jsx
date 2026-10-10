@@ -946,11 +946,16 @@ function TrendChart({ points, unit }) {
   );
 }
 
-const PIE_COLORS = ['#ff4d6a', '#7c5cff', '#2ec4b6', '#ffb703', '#4ea8de', '#f072b6', '#00b894', '#ff8c42'];
+// 饼图分类不再只取前 8 个，色板要够用，否则相邻扇区会撞色
+const PIE_COLORS = [
+  '#ff4d6a', '#7c5cff', '#2ec4b6', '#ffb703', '#4ea8de', '#f072b6', '#00b894', '#ff8c42',
+  '#5b8def', '#e5679b', '#3ddc97', '#f6c445', '#8f7bff', '#ff7a5c', '#26c6da', '#a3d139',
+  '#d7609a', '#6f8cff', '#ffa62b', '#4bc0a8', '#c86bfa', '#f2545b', '#59b4f5', '#b0c53d',
+];
 
-function CategoryPie({ items, activeName, onPick }) {
+function CategoryPie({ items, activeName, onPick, kind = 'expense' }) {
   const total = items.reduce((sum, item) => sum + Number(item.amount), 0);
-  if (!items.length || total <= 0) return <p className="muted">这个月还没有支出。</p>;
+  if (!items.length || total <= 0) return <p className="muted">这段时间还没有{kind === 'income' ? '收入' : '支出'}。</p>;
   const size = 220;
   const cx = size / 2;
   const cy = size / 2;
@@ -992,7 +997,7 @@ function CategoryPie({ items, activeName, onPick }) {
           </path>
         ))}
         <text x={cx} y={cy - 2} className="pie-total" textAnchor="middle">{money(total)}</text>
-        <text x={cx} y={cy + 18} className="pie-label" textAnchor="middle">支出合计</text>
+        <text x={cx} y={cy + 18} className="pie-label" textAnchor="middle">{kind === 'income' ? '收入合计' : '支出合计'}</text>
       </svg>
       <ul className="pie-legend">
         {slices.map((slice) => (
@@ -1000,7 +1005,7 @@ function CategoryPie({ items, activeName, onPick }) {
             <button type="button" className={activeName === slice.item.name ? 'active' : ''} onClick={() => onPick(slice.item)}>
               <i style={{ background: slice.color }} />
               <span>{slice.item.name}</span>
-              <b>{money(slice.item.amount)}</b>
+              <b>¥{money(slice.item.amount)}</b>
               <em>{Math.round(slice.share * 100)}%</em>
             </button>
           </li>
@@ -1023,6 +1028,8 @@ function Overview() {
   const [trendMode, setTrendMode] = useState('line');
   const [piePick, setPiePick] = useState(null);
   const [pieBills, setPieBills] = useState([]);
+  // 饼图分支出、收入两套，各自列出所有分类
+  const [pieKind, setPieKind] = useState('expense');
   const [pieOpen, setPieOpen] = useState(null);
   const [openTx, setOpenTx] = useState(null);
   const monthStart = useMemo(() => localDate(new Date(now.getFullYear(), now.getMonth(), 1)), []);
@@ -1042,7 +1049,12 @@ function Overview() {
     setPiePick(null);
   }
   // ids 为空表示「未分类」，后端用 none 匹配没有分类的账单
-  const pieQuery = (ids) => `/api/transactions?from=${win.from}&to=${win.to}&type=expense&categoryIds=${ids?.length ? ids.join(',') : 'none'}`;
+  const pieItems = pieKind === 'income' ? (summary?.incomeCategories || []) : (summary?.categories || []);
+  const pieQuery = (ids) => `/api/transactions?from=${win.from}&to=${win.to}&type=${pieKind}&categoryIds=${ids?.length ? ids.join(',') : 'none'}`;
+  function switchPieKind(value) {
+    setPieKind(value);
+    setPiePick(null);
+  }
   function pickCategory(item) {
     if (piePick?.name === item.name) {
       setPiePick(null);
@@ -1058,7 +1070,7 @@ function Overview() {
     setPieBills(data.transactions);
     bump();
   }
-  const max = Math.max(...(summary?.categories.map((c) => Number(c.amount)) || [1]), 1);
+  const max = Math.max(...(pieItems.map((c) => Number(c.amount)) || [1]), 1);
   return (
     <>
       <div className="page-head">
@@ -1112,7 +1124,7 @@ function Overview() {
       </section>
       <section className="card trend-card">
         <div className="card-head">
-          <h2>{trendMode === 'line' ? '收支走势' : '支出分类占比'}</h2>
+          <h2>{trendMode === 'line' ? '收支走势' : `${pieKind === 'income' ? '收入' : '支出'}分类占比`}</h2>
           <div className="row">
             <div className="segment" role="tablist">
               {[['line', '折线'], ['pie', '饼图']].map(([value, label]) => (
@@ -1131,7 +1143,20 @@ function Overview() {
           </>
         ) : (
           <>
-            <CategoryPie items={summary?.categories || []} activeName={piePick?.name} onPick={pickCategory} />
+            <div className="segment kind-switch" role="tablist" aria-label="饼图收支">
+              {[['expense', '支出'], ['income', '收入']].map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  data-kind={value}
+                  className={pieKind === value ? 'active' : ''}
+                  onClick={() => switchPieKind(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <CategoryPie items={pieItems} activeName={piePick?.name} onPick={pickCategory} kind={pieKind} />
             {piePick && (
               <div className="pie-bills">
                 <div className="tree-head">
@@ -1177,15 +1202,15 @@ function Overview() {
       )}
       <div className="grid cards" style={{ marginTop: 12 }}>
         <section className="card">
-          <h2>支出分类</h2>
+          <h2>{pieKind === 'income' ? '收入分类' : '支出分类'}</h2>
           <div className="list">
-            {(summary?.categories || []).map((item) => (
+            {pieItems.map((item) => (
               <div key={item.name}>
-                <div className="item"><span>{item.name}</span><b>{money(item.amount)}</b></div>
-                <div className="bar"><span style={{ width: `${(Number(item.amount) / max) * 100}%` }} /></div>
+                <div className="item"><span>{item.name}</span><b>¥{money(item.amount)}</b></div>
+                <div className="bar"><span className={pieKind} style={{ width: `${(Number(item.amount) / max) * 100}%` }} /></div>
               </div>
             ))}
-            {summary && summary.categories.length === 0 && <p className="muted">这段时间还没有支出。</p>}
+            {summary && pieItems.length === 0 && <p className="muted">这段时间还没有{pieKind === 'income' ? '收入' : '支出'}。</p>}
           </div>
         </section>
         <section className="card">
@@ -1697,21 +1722,42 @@ function Bills() {
   );
 }
 
+// 定期规则怎么重复，列表里要能一眼看出「每月 15 号」这种，而不是只知道「每月」
+function ruleSchedule(rule) {
+  if (rule.frequency === 'monthly') return `每月 ${rule.monthDay || '?'} 号`;
+  if (rule.frequency === 'weekly') {
+    const days = (rule.weekdays || []).map((d) => `周${WEEKDAYS[d - 1] || ''}`).join('、');
+    return `每周${days || '—'}`;
+  }
+  if (rule.frequency === 'interval') return `每 ${rule.intervalDays || 1} 天`;
+  if (rule.frequency === 'daily') return '每天';
+  if (rule.frequency === 'yearly') return `每年 ${rule.yearMonth || '?'} 月 ${rule.yearDay || '?'} 号`;
+  return rule.frequency;
+}
+
+// 新建定期账单时的初始表单
+function emptyRecurring() {
+  return {
+    ...emptyBill(),
+    frequency: 'monthly',
+    intervalDays: 1,
+    weekdays: [1],
+    // 每月几号单独填，不再跟着开始日期的日号走
+    monthDay: Number(nowLocal().slice(8, 10)),
+    startDate: nowLocal().slice(0, 10),
+    endDate: '',
+    time: '09:00',
+  };
+}
+
 function Recurring() {
   const books = useBooks();
   const { bookQuery } = books;
   const shared = !!books.currentBook && books.currentBook.kind !== 'personal';
   const [rules, setRules] = useState([]);
   const [error, setError] = useState('');
-  const [form, setForm] = useState({
-    ...emptyBill(),
-    frequency: 'monthly',
-    intervalDays: 1,
-    weekdays: [1],
-    startDate: nowLocal().slice(0, 10),
-    endDate: '',
-    time: '09:00',
-  });
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm] = useState(emptyRecurring());
   async function load() {
     const data = await api(`/api/recurring?${bookQuery}`);
     setRules(data.rules);
@@ -1720,24 +1766,52 @@ function Recurring() {
   async function submit(event) {
     event.preventDefault();
     setError('');
+    const body = {
+      ...form,
+      accountId: form.accountId ? Number(form.accountId) : null,
+      toAccountId: form.toAccountId ? Number(form.toAccountId) : null,
+      categoryId: form.categoryId ? Number(form.categoryId) : null,
+      monthDay: Number(form.monthDay) || Number(form.startDate.slice(8, 10)),
+      yearMonth: Number(form.startDate.slice(5, 7)),
+      yearDay: Number(form.startDate.slice(8, 10)),
+    };
     try {
-      await api('/api/recurring', {
-        method: 'POST',
-        body: {
-          ...form,
-          bookId: books.currentBookId || null,
-          accountId: form.accountId ? Number(form.accountId) : null,
-          toAccountId: form.toAccountId ? Number(form.toAccountId) : null,
-          categoryId: form.categoryId ? Number(form.categoryId) : null,
-          monthDay: Number(form.startDate.slice(8, 10)),
-          yearMonth: Number(form.startDate.slice(5, 7)),
-          yearDay: Number(form.startDate.slice(8, 10)),
-        },
-      });
+      if (editingId) {
+        await api(`/api/recurring/${editingId}`, { method: 'PATCH', body });
+      } else {
+        await api('/api/recurring', { method: 'POST', body: { ...body, bookId: books.currentBookId || null } });
+      }
+      cancelEdit();
       await load();
     } catch (err) {
       setError(err.message);
     }
+  }
+  function cancelEdit() {
+    setEditingId(null);
+    setForm(emptyRecurring());
+  }
+  // 点编辑把规则回填表单，改完走 PATCH
+  function editRule(rule) {
+    setEditingId(rule.id);
+    setForm({
+      ...emptyRecurring(),
+      type: rule.type,
+      amount: rule.amount,
+      accountId: rule.accountId ? String(rule.accountId) : '',
+      toAccountId: rule.toAccountId ? String(rule.toAccountId) : '',
+      categoryId: rule.categoryId ? String(rule.categoryId) : '',
+      payee: rule.payee || '',
+      note: rule.note || '',
+      frequency: rule.frequency,
+      intervalDays: rule.intervalDays || 1,
+      weekdays: rule.weekdays?.length ? rule.weekdays.map(Number) : [1],
+      monthDay: rule.monthDay || Number(nowLocal().slice(8, 10)),
+      startDate: rule.startDate || nowLocal().slice(0, 10),
+      endDate: rule.endDate || '',
+      time: rule.time || '09:00',
+    });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
   function toggleDay(day) {
     const set = new Set(form.weekdays);
@@ -1745,6 +1819,7 @@ function Recurring() {
     else set.add(day);
     setForm({ ...form, weekdays: [...set].sort() });
   }
+  const editing = rules.find((rule) => rule.id === editingId) || null;
   return (
     <>
       <div className="page-head">
@@ -1755,6 +1830,14 @@ function Recurring() {
       </div>
       <form className="card stack" onSubmit={submit}>
         {error && <div className="error">{error}</div>}
+        {editing && (
+          <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'wrap' }}>
+            <span className="tiny muted">
+              正在修改「{editing.payee || editing.note || ruleSchedule(editing)}」· 已入账的历史账单不动，只影响下一次及以后
+            </span>
+            <button className="secondary small" type="button" onClick={cancelEdit}>取消修改</button>
+          </div>
+        )}
         <BookFields
           form={form}
           setForm={setForm}
@@ -1771,6 +1854,18 @@ function Recurring() {
           {form.frequency === 'interval' && (
             <label>间隔天数<input type="number" min="1" value={form.intervalDays} onChange={(e) => setForm({ ...form, intervalDays: Number(e.target.value) })} /></label>
           )}
+          {form.frequency === 'monthly' && (
+            <label title="固定每月这一天入账；当月没有这一天时（比如 31 号遇到小月）记在当月最后一天">每月几号
+              <input
+                type="number"
+                min="1"
+                max="31"
+                value={form.monthDay}
+                onChange={(e) => setForm({ ...form, monthDay: Number(e.target.value) })}
+                required
+              />
+            </label>
+          )}
           <label>开始<input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} required /></label>
           <label>结束<input type="date" value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })} /></label>
           <label>时刻<input type="time" value={form.time} onChange={(e) => setForm({ ...form, time: e.target.value })} /></label>
@@ -1782,16 +1877,20 @@ function Recurring() {
             ))}
           </div>
         )}
-        <button className="primary" type="submit">保存定期账单</button>
+        <div className="row">
+          <button className="primary" type="submit">{editingId ? '保存修改' : '保存定期账单'}</button>
+          {editingId && <button className="secondary" type="button" onClick={cancelEdit}>取消</button>}
+        </div>
       </form>
       <div className="card" style={{ marginTop: 12 }}>
         {rules.map((rule) => (
-          <div className="item" key={rule.id}>
+          <div className={`item${editingId === rule.id ? ' picked' : ''}`} key={rule.id}>
             <div>
-              <div>{rule.payee || rule.note || FREQS.find((f) => f[0] === rule.frequency)?.[1]} · {money(rule.amount)}</div>
-              <div className="tiny muted">{rule.paused ? '已暂停' : `下次 ${rule.nextRun || '已结束'}`} · {rule.startDate}</div>
+              <div>{rule.payee || rule.note || ruleSchedule(rule)} · {money(rule.amount)}</div>
+              <div className="tiny muted">{rule.paused ? '已暂停' : `下次 ${rule.nextRun || '已结束'}`} · {ruleSchedule(rule)}{rule.endDate ? ` · ${rule.startDate} 至 ${rule.endDate}` : ` · ${rule.startDate} 起`}</div>
             </div>
             <div className="row">
+              <button className="secondary" type="button" onClick={() => editRule(rule)}>编辑</button>
               <button className="secondary" type="button" onClick={async () => { await api(`/api/recurring/${rule.id}`, { method: 'PATCH', body: { paused: !rule.paused } }); await load(); }}>{rule.paused ? '恢复' : '暂停'}</button>
               <button className="danger" type="button" onClick={async () => { await api(`/api/recurring/${rule.id}`, { method: 'DELETE' }); await load(); }}>删除</button>
             </div>
@@ -2822,7 +2921,9 @@ function DuplicatesPage() {
   const [loading, setLoading] = useState(false);
   const [limit, setLimit] = useState(30);
   const [picked, setPicked] = useState(() => new Set());
-  const [keepRule, setKeepRule] = useState('earlier');
+  // 批量删除时留组内哪一条：按组内列出的顺序（第 1 条、第 2 条……），
+  // 不用「较早/较晚」——同一组时间往往一模一样，分不出早晚
+  const [keepIndex, setKeepIndex] = useState(0);
   const [confirm, setConfirm] = useState(null);
   const seq = useRef(0);
 
@@ -2876,9 +2977,10 @@ function DuplicatesPage() {
   }
   function keepIn(group, tx) {
     const dropCount = group.count - 1;
+    const index = group.items.findIndex((item) => item.id === tx.id);
     setConfirm({
       title: `删除同组另外 ${dropCount} 笔？`,
-      body: `保留 ${formatWhen(tx.occurredAt)} · ${tx.accountName} · ${money(tx.amount)} 元，同组其余 ${dropCount} 笔一起删除。`,
+      body: `保留第 ${index + 1} 条：${formatWhen(tx.occurredAt)} · ${tx.accountName} · ${money(tx.amount)} 元，同组其余 ${dropCount} 笔一起删除。`,
       confirmLabel: '确定删除',
       onConfirm: () => act(group.key, () => api('/api/duplicates/resolve', {
         method: 'POST',
@@ -2910,6 +3012,10 @@ function DuplicatesPage() {
   // 每组留下一条，其余都算要删的
   const pickedAmount = pickedGroups.reduce((sum, group) => sum + Number(group.amount) * (group.count - 1), 0);
   const pickedDropCount = pickedGroups.reduce((sum, group) => sum + group.count - 1, 0);
+  // 组内最多几条，决定「保留第 N 条」能选到几
+  const maxKeep = Math.max(2, ...groups.map((group) => group.items?.length || group.count || 0));
+  // 组不足那么多条时，退到最后一条，不能不留
+  const keepIdOf = (group) => group.items[Math.min(keepIndex, group.items.length - 1)].id;
 
   function bulkIgnore() {
     if (!pickedGroups.length) return;
@@ -2923,18 +3029,14 @@ function DuplicatesPage() {
   }
   function bulkResolve() {
     if (!pickedGroups.length) return;
-    const rule = keepRule === 'later' ? '保留时间较晚的一条' : '保留时间较早的一条';
     setConfirm({
       title: `删除 ${pickedDropCount} 笔重复账单？`,
-      body: `${pickedGroups.length} 组，每组${rule}，共删 ${pickedDropCount} 笔、${money(pickedAmount)} 元。`,
+      body: `${pickedGroups.length} 组，每组保留第 ${keepIndex + 1} 条（按组内列出的顺序），共删 ${pickedDropCount} 笔、${money(pickedAmount)} 元。`,
       confirmLabel: '确定删除',
       onConfirm: () => act('bulk', () => api('/api/duplicates/resolve', {
         method: 'POST',
         body: {
-          groups: pickedGroups.map((group) => planOf(
-            group,
-            (keepRule === 'later' ? group.items[group.items.length - 1] : group.items[0]).id,
-          )),
+          groups: pickedGroups.map((group) => planOf(group, keepIdOf(group))),
         },
       })),
     });
@@ -3021,11 +3123,13 @@ function DuplicatesPage() {
               <button className="ghost small" type="button" onClick={() => setPicked(new Set())}>清空选择</button>
             )}
             <span className="spacer" />
-            <div className="segment" role="tablist">
-              {[['earlier', '保留较早'], ['later', '保留较晚']].map(([value, label]) => (
-                <button key={value} type="button" className={keepRule === value ? 'active' : ''} onClick={() => setKeepRule(value)}>{label}</button>
-              ))}
-            </div>
+            <label className="row tiny">批量保留
+              <select value={keepIndex} onChange={(e) => setKeepIndex(Number(e.target.value))}>
+                {Array.from({ length: maxKeep }, (_, index) => (
+                  <option key={index} value={index}>第 {index + 1} 条</option>
+                ))}
+              </select>
+            </label>
             <button className="secondary small" type="button" disabled={!pickedGroups.length || busy === 'bulk'} onClick={bulkIgnore}>不是重复</button>
             <button className="danger small" type="button" disabled={!pickedGroups.length || busy === 'bulk'} onClick={bulkResolve}>
               {busy === 'bulk' ? '处理中…' : `删除重复的 ${pickedDropCount} 笔`}
@@ -3049,9 +3153,9 @@ function DuplicatesPage() {
               </div>
             </div>
             <div className="dup-sides">
-              {group.items.map((tx) => (
+              {group.items.map((tx, index) => (
                 <div className="dup-side" key={tx.id}>
-                  <div className="tiny muted">{formatWhen(tx.occurredAt)}</div>
+                  <div className="tiny muted">第 {index + 1} 条 · {formatWhen(tx.occurredAt)}</div>
                   <div className="dup-title">{tx.payee || tx.categoryName || '—'}</div>
                   <div className="tiny muted">
                     {[tx.accountName, tx.categoryName, tx.note].filter(Boolean).join(' · ')}

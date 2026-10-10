@@ -62,6 +62,7 @@ import {
   generateRule,
   initialNextRun,
   loadRule,
+  nextRunFrom,
   pendingInMonth,
   startScheduler,
 } from './recurring.js';
@@ -166,7 +167,8 @@ function ruleFromBody(userId, body) {
     frequency,
     intervalDays: Math.max(1, Number(body.intervalDays) || 1),
     weekdays,
-    monthDay: Number(body.monthDay) || Number(startDate.slice(8, 10)),
+    // 固定几号由前端单独传，兜底才退回开始日期的日号
+    monthDay: Math.min(31, Math.max(1, Number(body.monthDay) || Number(startDate.slice(8, 10)))),
     yearMonth: Number(body.yearMonth) || Number(startDate.slice(5, 7)),
     yearDay: Number(body.yearDay) || Number(startDate.slice(8, 10)),
     startDate,
@@ -1002,19 +1004,27 @@ app.get('/api/summary', authRequired, (req, res) => {
     WHERE ${scopeSql} AND occurred_at >= ? AND occurred_at < date(?, '+1 day')
   `).get(...scopeParams, start, end);
   // 同名分类可能有多个 id（历史归档留下的），按名称聚合并把 id 都收集起来，点饼图时一起筛
-  const categories = db.prepare(`
-    SELECT COALESCE(p.name, c.name, t.category_label, '未分类') AS category_name,
+  // 支出和收入各算一组，前端分别画饼
+  const categoryRows = db.prepare(`
+    SELECT t.type AS kind,
+      COALESCE(p.name, c.name, t.category_label, '未分类') AS category_name,
       GROUP_CONCAT(DISTINCT COALESCE(p.id, c.id)) AS category_ids,
-      SUM(t.amount_cents) AS amount_cents
+      SUM(ABS(t.amount_cents)) AS amount_cents
     FROM transactions t
     LEFT JOIN categories c ON c.id = t.category_id
     LEFT JOIN categories p ON p.id = c.parent_id
-    WHERE ${scopeSql} AND t.type = 'expense'
+    WHERE ${scopeSql} AND t.type IN ('expense', 'income')
       AND t.occurred_at >= ? AND t.occurred_at < date(?, '+1 day')
-    GROUP BY category_name
-    ORDER BY amount_cents DESC
-    LIMIT 8
+    GROUP BY t.type, category_name
+    ORDER BY t.type, amount_cents DESC
   `).all(...scopeParams, start, end);
+  const shape = (kind) => categoryRows
+    .filter((row) => row.kind === kind)
+    .map((row) => ({
+      name: row.category_name,
+      ids: row.category_ids ? row.category_ids.split(',').map(Number) : [],
+      amount: centsToYuan(row.amount_cents),
+    }));
   const accounts = db.prepare(`${ACCOUNT_SQL} WHERE a.user_id = ? AND a.archived = 0 ORDER BY a.sort, a.id`).all(req.user.id);
   res.json({
     year,
@@ -1026,11 +1036,8 @@ app.get('/api/summary', authRequired, (req, res) => {
     income: centsToYuan(totals.income),
     expense: centsToYuan(totals.expense),
     net: centsToYuan(totals.income - totals.expense),
-    categories: categories.map((row) => ({
-      name: row.category_name,
-      ids: row.category_ids ? row.category_ids.split(',').map(Number) : [],
-      amount: centsToYuan(row.amount_cents),
-    })),
+    categories: shape('expense'),
+    incomeCategories: shape('income'),
     accounts: accounts.map(presentAccount),
   });
 });
@@ -1333,7 +1340,8 @@ app.patch('/api/recurring/:id', authRequired, wrap((req, res) => {
     endDate: req.body.endDate ?? current.end_date,
     time: req.body.time ?? current.time,
   });
-  const nextRun = initialNextRun(rule);
+  // 改完从今天往后重新排期，过去的历史账单保留不动，不会按新规则再补一遍
+  const nextRun = nextRunFrom(rule, todayString());
   db.prepare(`
     UPDATE recurring_rules SET
       type = ?, amount_cents = ?, account_id = ?, to_account_id = ?, category_id = ?,
@@ -1346,6 +1354,12 @@ app.patch('/api/recurring/:id', authRequired, wrap((req, res) => {
     rule.monthDay, rule.yearMonth, rule.yearDay, rule.startDate, rule.endDate, rule.time, nextRun,
     req.body.paused != null ? (req.body.paused ? 1 : 0) : current.paused, current.id,
   );
+  // 按旧规则排到未来的账单先清掉，再按新规则补记到今天（同一天不会重复入账）
+  db.prepare(
+    "DELETE FROM transactions WHERE user_id = ? AND recurring_rule_id = ? AND date(occurred_at) > ?",
+  ).run(req.user.id, current.id, todayString());
+  const stored = loadRule(db.prepare('SELECT * FROM recurring_rules WHERE id = ?').get(current.id));
+  generateRule(stored, { through: todayString() });
   res.json({ rule: presentRule(db.prepare('SELECT * FROM recurring_rules WHERE id = ?').get(current.id)) });
 }));
 

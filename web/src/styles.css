@@ -363,6 +363,20 @@ h2 { font-size: 18px; }
 .segment { display: flex; gap: 2px; padding: 3px; border-radius: 999px; background: var(--soft); }
 .segment button { border: 0; background: transparent; color: var(--muted); border-radius: 999px; padding: 6px 12px; }
 .segment button.active { background: var(--chip); color: var(--coral-dark); box-shadow: 0 1px 4px rgba(36, 28, 51, 0.08); }
+/* 支出/收入切换：选中态直接用收支本身的配色，一眼能看出在看哪一边 */
+.segment.kind-switch { margin: 2px 0 12px; align-self: flex-start; padding: 4px; gap: 4px; }
+.segment.kind-switch button {
+  padding: 8px 22px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--muted);
+  transition: background 0.15s, color 0.15s;
+}
+.segment.kind-switch button:hover { color: var(--ink); }
+.segment.kind-switch button.active { font-weight: 600; box-shadow: 0 2px 8px rgba(36, 28, 51, 0.12); }
+/* 浅底 + 深字，比反白字更清楚，深浅色模式下都读得出来 */
+.segment.kind-switch button.active[data-kind='expense'] { background: #ffe1e7; color: #c9184a; }
+.segment.kind-switch button.active[data-kind='income'] { background: #d6f5ea; color: #067153; }
 .legend { display: flex; gap: 16px; margin: 10px 0 4px; font-size: 13px; }
 .legend span::before { content: ''; display: inline-block; width: 16px; height: 3px; margin-right: 6px; border-radius: 99px; vertical-align: middle; background: currentColor; }
 .trend-wrap { position: relative; }
@@ -543,7 +557,7 @@ h2 { font-size: 18px; }
 .form-row.wrap > label.field-full > input,
 .form-row.wrap > label.field-full > textarea { width: 100%; box-sizing: border-box; }
 .form-row.wrap > label.field-full > textarea { min-height: 200px; resize: vertical; }
-.pie-wrap { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.pie-wrap { display: flex; align-items: flex-start; gap: 20px; flex-wrap: wrap; }
 .pie-chart { width: 220px; height: 220px; flex: none; }
 .pie-slice {
   cursor: pointer;
@@ -561,13 +575,17 @@ h2 { font-size: 18px; }
   padding: 0;
   flex: 1;
   min-width: 220px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  /* 分类多的时候分两列，紧凑且每一列内部对齐 */
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  align-items: start;
+  gap: 2px 20px;
 }
 .pie-legend button {
-  display: flex;
-  align-items: center;
+  display: grid;
+  /* 色块 | 分类名 | 金额 | 占比：四列固定，多行分类名也能竖着对齐 */
+  grid-template-columns: 10px minmax(0, 1fr) auto auto;
+  align-items: start;
   gap: 8px;
   width: 100%;
   border: 0;
@@ -578,24 +596,27 @@ h2 { font-size: 18px; }
   text-align: left;
   color: inherit;
   font: inherit;
+  line-height: 1.35;
 }
 .pie-legend button:hover { background: var(--soft); }
 .pie-legend button.active { background: var(--soft); font-weight: 600; }
-.pie-legend i { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+/* 色块跟第一行文字对齐 */
+.pie-legend i { width: 10px; height: 10px; border-radius: 3px; margin-top: 5px; }
 .pie-legend span {
-  flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* 分类名允许换行，长名字不再被截断成省略号 */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
 }
-.pie-legend b { font-variant-numeric: tabular-nums; }
-.pie-legend em { color: var(--muted); font-style: normal; font-size: 12px; width: 40px; text-align: right; }
+.pie-legend b { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.pie-legend em { color: var(--muted); font-style: normal; font-size: 12px; width: 40px; text-align: right; white-space: nowrap; }
 .pie-bills { margin-top: 14px; }
 .small { padding: 4px 12px; font-size: 13px; }
 .list > .item:first-child, .list > div:first-child .item { border-top: 0; }
 .bar { height: 6px; border-radius: 99px; background: var(--soft); overflow: hidden; margin: 0 0 8px; }
 .bar span { display: block; height: 100%; background: var(--coral); border-radius: 99px; }
+.bar span.income { background: var(--income); }
 .primary, .secondary, .danger {
   border: 0;
   border-radius: 999px;
