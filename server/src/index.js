@@ -313,6 +313,36 @@ app.get('/api/users', authRequired, adminRequired, (_req, res) => {
   res.json({ users: rows.map(publicUser) });
 });
 
+// 加协作成员时按用户名/昵称模糊找人：只要登录就能搜，但只回 id/用户名/昵称
+app.get('/api/users/search', authRequired, (req, res) => {
+  const raw = String(req.query.q || '').trim();
+  if (!raw) return res.json({ users: [] });
+  const limit = Math.min(Number(req.query.limit) || 20, 50);
+  // LIKE 里 % 和 _ 是通配符，先转义掉，不然输个下划线就变成「任意一个字符」
+  const escaped = raw.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+  const like = `%${escaped}%`;
+  const prefix = `${escaped}%`;
+  const bookId = Number(req.query.excludeBookId) || 0;
+  // SQLite 字符串里反斜杠就是普通字符，ESCAPE '\' 表示用它取消 % 和 _ 的通配含义
+  const esc = "ESCAPE '\\'";
+  const params = [like, like];
+  let sql = `
+    SELECT u.id, u.username, u.display_name
+    FROM users u
+    WHERE u.is_active = 1 AND (u.username LIKE ? ${esc} OR u.display_name LIKE ? ${esc})
+  `;
+  // 已经是这个账本成员的不用再列出来
+  if (bookId) {
+    sql += ' AND NOT EXISTS (SELECT 1 FROM book_members m WHERE m.book_id = ? AND m.user_id = u.id)';
+    params.push(bookId);
+  }
+  // 完全同名的排最前，然后是前缀命中的，其余按用户名排
+  sql += ` ORDER BY (u.username = ?) DESC, (u.username LIKE ? ${esc}) DESC, u.username LIMIT ?`;
+  params.push(raw, prefix, limit);
+  const rows = db.prepare(sql).all(...params);
+  res.json({ users: rows.map((r) => ({ id: r.id, username: r.username, displayName: r.display_name })) });
+});
+
 app.patch('/api/users/:id', authRequired, adminRequired, wrap((req, res) => {
   const id = Number(req.params.id);
   const row = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
@@ -611,13 +641,34 @@ app.delete('/api/books/:id', authRequired, wrap((req, res) => {
   res.json({ archived: false, deleted: true });
 }));
 
+// 协作成员：前端搜索后点选会带 userId；手输用户名则精确匹配，找不到再退化成模糊匹配
+function pickMemberUser(body) {
+  const userId = Number(body?.userId) || 0;
+  if (userId) return db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  const keyword = String(body?.username || '').trim();
+  if (!keyword) return null;
+  const exact = db.prepare('SELECT * FROM users WHERE username = ?').get(keyword);
+  if (exact) return exact;
+  const escaped = keyword.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+  const like = `%${escaped}%`;
+  const hits = db.prepare(`
+    SELECT * FROM users
+    WHERE is_active = 1 AND (username LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\')
+    LIMIT 2
+  `).all(like, like);
+  if (hits.length === 1) return hits[0];
+  if (hits.length > 1) return { ambiguous: true, keyword };
+  return null;
+}
+
 app.post('/api/books/:id/members', authRequired, wrap((req, res) => {
   const row = bookById(req.params.id);
   if (!row || !canManageBook(req.user, row)) return fail(res, 404, '账本不存在');
   if (row.kind === 'personal') return fail(res, 400, '个人账本不能加成员');
-  const username = String(req.body.username || '').trim();
-  const target = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+  // 前端搜索后点选带 userId；手输用户名时按精确匹配，找不到再退化成模糊匹配
+  const target = pickMemberUser(req.body);
   if (!target) return fail(res, 404, '用户不存在');
+  if (target.ambiguous) return fail(res, 409, `「${target.keyword}」匹配到多个人，请从搜索结果里选`);
   const now = new Date().toISOString();
   db.prepare(
     'INSERT OR IGNORE INTO book_members (book_id, user_id, role, created_at) VALUES (?, ?, ?, ?)',

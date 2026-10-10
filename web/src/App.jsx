@@ -1504,6 +1504,7 @@ function Overview() {
 
 function CalendarPage() {
   const books = useBooks();
+  const { saved } = useRefresh();
   const { bookQuery } = books;
   const now = new Date();
   const [cursor, setCursor] = useState({ year: now.getFullYear(), month: now.getMonth() + 1 });
@@ -1513,11 +1514,11 @@ function CalendarPage() {
   const [open, setOpen] = useState(null);
   useEffect(() => {
     api(`/api/calendar?year=${cursor.year}&month=${cursor.month}&${bookQuery}`).then((data) => setDays(data.days));
-  }, [cursor, bookQuery]);
+  }, [cursor, bookQuery, saved]);
   useEffect(() => {
     if (!picked) return;
     api(`/api/transactions?from=${picked}&to=${picked}&${bookQuery}`).then((data) => setItems(data.transactions));
-  }, [picked, bookQuery]);
+  }, [picked, bookQuery, saved]);
   const map = useMemo(() => Object.fromEntries(days.map((d) => [d.day, d])), [days]);
   const first = new Date(cursor.year, cursor.month - 1, 1);
   const lead = (first.getDay() + 6) % 7;
@@ -1627,6 +1628,8 @@ function CalendarPage() {
 
 function Bills() {
   const books = useBooks();
+  // 记一笔/改一笔之后 saved 会变，列表要跟着重新拉，不然新账看不到
+  const { saved } = useRefresh();
   const { categories } = books;
   const activeBookId = books.currentBookId;
   const [rows, setRows] = useState([]);
@@ -1742,7 +1745,7 @@ function Bills() {
       setExporting('');
     }
   }
-  useEffect(() => { load().catch((err) => setError(err.message)); }, [bookId]);
+  useEffect(() => { load().catch((err) => setError(err.message)); }, [bookId, saved]);
   async function remove(id) {
     await api(`/api/transactions/${id}`, { method: 'DELETE' });
     setSelected(null);
@@ -3560,6 +3563,8 @@ function BookEditModal({ book, onClose, onChanged }) {
   const [kind, setKind] = useState(book.kind);
   const [person, setPerson] = useState('');
   const [username, setUsername] = useState('');
+  const [memberHits, setMemberHits] = useState([]);
+  const [memberSearching, setMemberSearching] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -3618,13 +3623,40 @@ function BookEditModal({ book, onClose, onChanged }) {
     });
   }
 
+  // 输关键字就去找人：用户名/昵称模糊匹配，已经在账本里的不再列出来
+  useEffect(() => {
+    const keyword = username.trim();
+    if (!keyword) {
+      setMemberHits([]);
+      setMemberSearching(false);
+      return undefined;
+    }
+    setMemberSearching(true);
+    const timer = setTimeout(() => {
+      api(`/api/users/search?q=${encodeURIComponent(keyword)}&excludeBookId=${book.id}`)
+        .then((data) => setMemberHits(data.users || []))
+        .catch(() => setMemberHits([]))
+        .finally(() => setMemberSearching(false));
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [username, book.id]);
+
   function addMember(event) {
     event.preventDefault();
-    const value = username.trim();
-    if (!value) return;
+    // 回车/点按钮：直接用搜索结果里最靠前的那个，省得再点一次
+    const hit = memberHits[0];
+    if (!hit) {
+      setError(username.trim() ? '没找到这个人，换个关键字试试' : '先输个用户名或昵称');
+      return;
+    }
+    addMemberById(hit);
+  }
+
+  function addMemberById(user) {
     act(async () => {
-      await api(`/api/books/${book.id}/members`, { method: 'POST', body: { username: value } });
+      await api(`/api/books/${book.id}/members`, { method: 'POST', body: { userId: user.id } });
       setUsername('');
+      setMemberHits([]);
     });
   }
 
@@ -3735,10 +3767,39 @@ function BookEditModal({ book, onClose, onChanged }) {
               ))}
             </div>
             <form className="book-add-member" onSubmit={addMember}>
-              <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="用户名，加进来一起记" />
-              <button className="secondary small" type="submit" disabled={busy}>加成员</button>
+              <div className="member-picker">
+                <input
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="用户名或昵称，输几个字就能搜"
+                  autoComplete="off"
+                />
+                {username.trim() && (
+                  <div className="member-suggest">
+                    {memberSearching && <div className="member-suggest-empty tiny muted">搜索中…</div>}
+                    {!memberSearching && memberHits.length === 0 && (
+                      <div className="member-suggest-empty tiny muted">没匹配到用户</div>
+                    )}
+                    {!memberSearching && memberHits.map((user) => (
+                      <button
+                        type="button"
+                        className="member-suggest-item"
+                        key={user.id}
+                        disabled={busy}
+                        onClick={() => addMemberById(user)}
+                      >
+                        <b>{user.displayName}</b>
+                        <span className="tiny muted">{user.username}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <button className="secondary small" type="submit" disabled={busy || memberHits.length === 0}>加成员</button>
             </form>
-            <p className="tiny muted">协作成员登录后能看到这个账本、在里面记账，跟参与人是两回事。</p>
+            <p className="tiny muted">
+              输关键字搜人（用户名、昵称都行），点结果直接加进来。协作成员登录后能看到这个账本、在里面记账，跟参与人是两回事。
+            </p>
           </div>
         )}
         {!personal && (
