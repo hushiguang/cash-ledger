@@ -88,6 +88,7 @@
 }
 
 * { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body {
   margin: 0;
   min-height: 100vh;
@@ -97,6 +98,7 @@ body {
     var(--bg);
 }
 button, input, select, textarea { font: inherit; color: inherit; }
+button, a { touch-action: manipulation; }
 button { cursor: pointer; }
 a { color: inherit; text-decoration: none; }
 
@@ -109,6 +111,7 @@ a { color: inherit; text-decoration: none; }
   position: sticky;
   top: 0;
   height: 100vh;
+  height: 100dvh;
   z-index: 20;
   display: flex;
   flex-direction: column;
@@ -117,6 +120,8 @@ a { color: inherit; text-decoration: none; }
   background: var(--paper);
   border-right: 1px solid var(--line);
 }
+/* 品牌 + 账本切换：桌面上下排，手机上并排（见下面的媒体查询） */
+.sidebar-head { display: flex; flex-direction: column; gap: 14px; }
 .brand {
   font-family: "Source Serif 4", serif;
   font-size: 22px;
@@ -253,24 +258,19 @@ a { color: inherit; text-decoration: none; }
 .hero-cell span { font-size: 13px; color: var(--muted); }
 .hero-cell b { font-family: "Source Serif 4", serif; font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
 @media (max-width: 900px) {
-  .app-shell { grid-template-columns: 1fr; }
-  .sidebar {
-    position: sticky;
-    height: auto;
-    flex-direction: column;
-    gap: 10px;
-    padding: 12px 14px;
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
+  .app-shell {
+    height: 100dvh;
+    min-height: 0;
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+    align-content: start;
+    overflow: hidden;
   }
-  .brand-sub { display: none; }
+  /* 窄屏改走底部标签，桌面侧栏整段收起 */
+  .sidebar { display: none; }
   .book-switch-modal { width: 100%; }
-  .sidenav { flex-direction: row; gap: 12px; overflow-x: auto; margin: 0; padding: 0; }
-  .nav-group { flex-direction: row; gap: 6px; }
-  .nav-title { display: none; }
-  .sidenav a { white-space: nowrap; }
-  .sidebar-foot { border-top: 0; padding-top: 0; }
-  .main { padding: 16px 14px 90px; }
+  .main { padding: 12px 12px calc(var(--h5-tab-h) + 28px + var(--safe-bottom)); }
+  .page { width: 100%; margin: 0 0 16px; }
   .hero { grid-template-columns: 1fr; }
   .hero-split { border-left: 0; border-top: 1px solid var(--line); }
 }
@@ -345,9 +345,16 @@ a { color: inherit; text-decoration: none; }
   .fab, .fab::before, .fab::after, .fab-plus { animation: none; }
 }
 @media (max-width: 900px) {
-  .fab { width: 60px; height: 60px; font-size: 29px; right: 26px; bottom: calc(26px + env(safe-area-inset-bottom, 0px)); }
+  .fab {
+    width: 60px;
+    height: 60px;
+    font-size: 29px;
+    right: 16px;
+    bottom: calc(var(--h5-tab-h) + 16px + var(--safe-bottom));
+  }
 }
 .page-head, .row, .split, .form-row { display: flex; gap: 12px; align-items: center; }
+.ov-tools { flex-wrap: wrap; }
 .page-head { justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; }
 h1, h2 { font-family: "Source Serif 4", serif; font-weight: 560; margin: 0; color: var(--ink); }
 h1 { font-size: 30px; }
@@ -487,6 +494,7 @@ h2 { font-size: 18px; }
   gap: 12px;
   margin-bottom: 8px;
 }
+.cal-day-bar { display: none; }
 .tree-row {
   display: flex;
   align-items: center;
@@ -708,6 +716,7 @@ textarea { min-height: 72px; }
   padding: 8px 10px;
 }
 .calendar { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; }
+.cal-dows, .cal-body, .cal-weeks { display: contents; }
 .dow, .day {
   min-height: 92px;
   border-radius: 14px;
@@ -939,7 +948,7 @@ h2 .tx-flag { margin-left: 8px; vertical-align: 2px; }
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 20;
+  z-index: 50;
   display: grid;
   place-items: center;
   padding: 24px;
@@ -1138,3 +1147,722 @@ h2 .tx-flag { margin-left: 8px; vertical-align: 2px; }
   0% { transform: translateX(-100%); }
   100% { transform: translateX(400%); }
 }
+
+/* ===== 手机竖屏（≤720px）：能换行就换行，表格横向滚，触摸目标加大 ===== */
+@media (max-width: 720px) {
+  /* iOS 上输入框字号小于 16px 时，聚焦会自动放大整个页面 */
+  input, select, textarea { font-size: 16px; }
+
+  h1 { font-size: 24px; }
+  .page { width: 100%; margin: 0 0 16px; }
+  .main { padding: 12px 10px calc(var(--h5-tab-h) + 24px + var(--safe-bottom)); }
+
+  /* 一行放不下就换行：表单、按钮组、页码都别把页面撑宽 */
+  .row, .form-row, .form-row.wrap, .cat-edit, .book-add-member, .pager { flex-wrap: wrap; }
+  /* 列表项右侧的按钮组挤不下时整组换到下一行 */
+  .item, .tree-row, .tree-form, .account-actions { flex-wrap: wrap; }
+  .item .row { flex: 1 1 auto; justify-content: flex-end; }
+  .form-row > label,
+  .search-row label,
+  .search-row label.grow { flex: 1 1 100%; min-width: 0; }
+  .search-row .primary,
+  .search-row .secondary { align-self: stretch; }
+  .search-row .amount-range { width: 100%; }
+  .search-row .amount-range input { flex: 1; width: auto; min-width: 0; }
+  .book-add-member .member-picker { flex: 1 1 100%; }
+  .book-add-member button { width: 100%; }
+
+  /* 分段控件自己横向滚，不撑破页面 */
+  .segment {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .segment::-webkit-scrollbar { display: none; }
+  .segment button { white-space: nowrap; }
+
+  /* 表格：列多就横向滚，别把列挤成一团 */
+  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .table-scroll > table { min-width: 420px; }
+  .preview > table { min-width: 720px; }
+  .book-table { min-width: 620px; }
+  .book-actions-row { flex-wrap: wrap; justify-content: flex-start; }
+  .aa-table { font-size: 13px; }
+  .aa-table th, .aa-table td { padding: 8px 6px; }
+
+  /* 账本管理：左侧标签栏改成一行，右侧单列 */
+  .books-layout { grid-template-columns: 1fr; }
+
+  /* 日历：格子收窄，金额缩字号并省略，避免串到隔壁格 */
+  .calendar { gap: 3px; }
+  .day { min-height: 52px; padding: 4px 2px; border-radius: 10px; }
+  .day button.pick { font-size: 13px; }
+  .day .tiny { font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* 饼图居中、图例单列 */
+  .pie-wrap { justify-content: center; gap: 10px; }
+  .pie-chart { width: 180px; height: 180px; }
+  .pie-legend { grid-template-columns: 1fr; min-width: 0; }
+
+  /* 弹窗接近满屏，按钮整行更好点 */
+  .modal-backdrop { padding: 10px; }
+  .modal,
+  .modal.modal-wide,
+  .modal.modal-detail { width: 100%; max-height: min(92dvh, calc(100dvh - var(--safe-top) - var(--safe-bottom) - 24px)); padding: 18px 16px 16px; border-radius: 18px; }
+  .modal-actions { flex-wrap: wrap; gap: 8px; }
+  .modal-actions > * { flex: 1 1 120px; min-height: 42px; }
+  .modal-amount { font-size: 30px; }
+  .detail-grid div { grid-template-columns: 56px 1fr; gap: 8px; }
+
+  /* 触摸目标：这些按钮原本只有 22~26px 高，手指很难点准 */
+  .tx-del { padding: 6px 10px; min-height: 34px; }
+  .chip-btn { min-width: 28px; height: 28px; }
+  .book-actions-row button { padding: 6px 10px; font-size: 13px; min-height: 32px; }
+  .sidebar-foot .ghost { padding: 6px 10px; min-height: 32px; }
+  .ghost.small, .secondary.small, .primary.small { min-height: 34px; }
+
+  /* 长文本和统计说明不再固定宽度 */
+  .import-stat { max-width: none; text-align: left; }
+  .clip.wide { max-width: 100%; }
+  .tx-row { gap: 8px; padding: 10px 4px; }
+  .tx-amount { font-size: 15px; }
+  .bill-bulk .bulk-cat-picker { flex: 1 1 100%; }
+  .hero-value { font-size: 32px; }
+  .stat .value { font-size: 24px; }
+}
+
+/* 小屏手机：再收一档，给悬浮按钮和日历留位置 */
+@media (max-width: 420px) {
+  .fab {
+    width: 54px;
+    height: 54px;
+    font-size: 26px;
+    right: 14px;
+    bottom: calc(var(--h5-tab-h) + 12px + var(--safe-bottom));
+  }
+  .calendar { gap: 2px; }
+  .day { min-height: 46px; }
+  .hero-value { font-size: 28px; }
+  .stat .value { font-size: 22px; }
+}
+
+/* ---------- 移动端 / 原生壳（Capacitor）适配 ---------- */
+
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --h5-tab-h: 56px;
+}
+
+/* dvh：地址栏收起时不再留白；不支持的浏览器继续用上面的 100vh */
+@supports (min-height: 100dvh) {
+  body { min-height: 100dvh; }
+  .app-shell { min-height: 100dvh; }
+  .auth { min-height: 100dvh; }
+}
+
+/* iOS 橡皮筋、整页下拉刷新都关掉，滚动交给内部容器 */
+html, body { overscroll-behavior-y: none; }
+* { -webkit-tap-highlight-color: transparent; }
+
+/* 原生壳里状态栏是 overlay 的，顶部自己让出刘海/状态栏，底部给小黑条留位置 */
+.sidebar { padding-top: calc(20px + var(--safe-top)); }
+.auth {
+  padding-top: calc(24px + var(--safe-top));
+  padding-bottom: calc(24px + var(--safe-bottom));
+  padding-left: calc(24px + var(--safe-left));
+  padding-right: calc(24px + var(--safe-right));
+}
+.auth-theme { top: calc(16px + var(--safe-top)); right: calc(16px + var(--safe-right)); }
+
+/* 桌面不渲染这套底栏；窄屏再打开 */
+.h5-bar,
+.h5-tabs,
+.h5-sheet,
+.h5-sheet-backdrop,
+.h5-only { display: none; }
+
+@media (max-width: 900px) {
+  html { scroll-padding-top: calc(64px + var(--safe-top)); scroll-padding-bottom: calc(var(--h5-tab-h) + var(--safe-bottom) + 24px); }
+  /* iOS 聚焦输入框时字号小于 16px 会把整页放大 */
+  input, select, textarea { font-size: 16px; }
+
+  .h5-bar {
+    display: flex;
+    position: relative;
+    top: auto;
+    z-index: 40;
+    align-items: center;
+    gap: 12px;
+    min-height: 52px;
+    padding: calc(6px + var(--safe-top)) calc(14px + var(--safe-right)) 6px calc(14px + var(--safe-left));
+    background: var(--bg);
+    border-bottom: 1px solid var(--line);
+  }
+  .h5-bar .brand { font-size: 18px; flex: none; letter-spacing: 0; }
+  /* 账本收成右侧一条胶囊，不再用侧栏那种两行卡片 */
+  .h5-bar .book-picker { flex: none; margin-left: auto; max-width: 52%; min-width: 0; }
+  .h5-bar .book-current {
+    width: auto;
+    max-width: 100%;
+    padding: 3px 10px 3px 3px;
+    gap: 6px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--soft);
+  }
+  .h5-bar .book-current:hover { border-color: transparent; }
+  .h5-bar .book-avatar { width: 26px; height: 26px; border-radius: 50%; font-size: 12px; }
+  .h5-bar .book-meta .tiny { display: none; }
+  .h5-bar .book-meta b { font-size: 13px; font-weight: 600; }
+
+  .main {
+    position: relative;
+    z-index: 1;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 10px 14px calc(var(--h5-tab-h) + 78px + var(--safe-bottom));
+    background: var(--bg);
+  }
+  .page-head { flex-direction: column; align-items: stretch; margin-bottom: 10px; gap: 8px; }
+  .page-head h1 { font-size: 22px; line-height: 1.15; }
+  .page-head > .row { width: 100%; min-width: 0; justify-content: flex-start; }
+  .page-head:has(.ov-tools) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    gap: 8px 10px;
+  }
+  .page-head:has(.ov-tools) > .ov-tools { display: contents; }
+  .ov-tools > .segment {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    width: 100%;
+  }
+  .ov-tools > .segment button { flex: 1 1 0; padding: 6px 0; font-size: 12px; text-align: center; }
+  .ov-tools > .month-nav {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: end;
+    flex-wrap: nowrap;
+    gap: 6px;
+    width: auto;
+  }
+  .month-nav .secondary { padding: 6px 10px; font-size: 13px; white-space: nowrap; }
+  .ov-tools > label { grid-column: 1 / -1; width: 100%; }
+  .h5-bar .book-picker { flex: 1; max-width: none; min-width: 0; display: flex; justify-content: flex-end; }
+  .h5-bar .book-current { min-width: 0; overflow: hidden; }
+  .card-head h2 { min-width: 0; }
+  .card-head .row { flex: none; max-width: 100%; }
+  .page-actions {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    max-width: 100%;
+  }
+  .page-actions::-webkit-scrollbar { display: none; }
+  .page-actions > button { flex: none; white-space: nowrap; padding: 6px 12px; font-size: 13px; }
+  .page-head .segment { max-width: 100%; }
+  .card { padding: 12px 14px; border-radius: 16px; }
+  .hero { border-radius: 18px; }
+  .hero-main { padding: 14px 16px 8px; }
+  .hero-value { font-size: 34px; }
+  .hero-cell { padding: 10px 16px 14px; }
+  .hero-cell b { font-size: 18px; }
+
+  /* 日历：整月一张纸，日期是圆点，金额改成颜色点，避免格子里挤字 */
+  .cal-head { align-items: center; margin-bottom: 8px; }
+  .cal-head > div:first-child { display: none; }
+  .cal-nav {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 40px minmax(0, 1fr) 40px;
+    align-items: center;
+    justify-content: stretch;
+    gap: 0;
+    overflow: visible;
+    flex-wrap: nowrap;
+  }
+  .cal-nav strong {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 36px;
+    text-align: center;
+    font-size: 17px;
+    font-weight: 650;
+    line-height: 1;
+  }
+  .cal-nav .secondary {
+    position: relative;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border-radius: 50%;
+    font-size: 0;
+    color: transparent;
+    justify-self: center;
+  }
+  .cal-nav .secondary::after {
+    content: '';
+    position: absolute;
+    width: 8px;
+    height: 8px;
+    border-right: 2px solid var(--ink);
+    border-bottom: 2px solid var(--ink);
+    top: 50%;
+    left: 50%;
+  }
+  .cal-nav .secondary:first-child::after { transform: translate(-30%, -50%) rotate(135deg); }
+  .cal-nav .secondary:last-child::after { transform: translate(-70%, -50%) rotate(-45deg); }
+  .calendar {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    padding: 4px 2px 8px;
+    box-shadow: var(--shadow);
+  }
+  .cal-dows, .cal-weeks {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 0;
+  }
+  .cal-body { display: block; }
+  .cal-dows { flex: none; }
+  .dow {
+    min-height: 0;
+    padding: 8px 0 4px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .day, .day.empty {
+    min-height: 48px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .day button.pick {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .day.today, .day.picked { border: 0; box-shadow: none; }
+  .day.today button.pick { background: var(--soft); color: var(--coral); }
+  .day.picked button.pick { background: var(--coral); color: #fff; }
+  .day-marks { display: flex; align-items: center; justify-content: center; gap: 3px; min-height: 8px; }
+  .day .tiny {
+    font-size: 0;
+    line-height: 0;
+    width: 5px;
+    height: 5px;
+    margin: 0;
+    padding: 0;
+    border-radius: 50%;
+    overflow: hidden;
+    color: transparent;
+  }
+  .day .tiny.expense { background: var(--expense); }
+  .day .tiny.income { background: var(--income); }
+  .day .tiny.muted { background: var(--muted); }
+  .cal-day { margin-top: 10px !important; min-height: calc(100dvh - 220px); }
+  .cal-day .tree-head { display: none; }
+  .cal-day-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    min-height: 44px;
+    padding: 0 2px;
+  }
+  .cal-day-bar h2 {
+    margin: 0;
+    font-family: inherit;
+    font-size: 16px;
+    font-weight: 650;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .cal-day-bar .row {
+    margin-left: auto;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 8px;
+  }
+  .cal-day-bar .tiny {
+    font-size: 14px;
+    font-weight: 650;
+    line-height: 1;
+  }
+  .cal-day-bar .secondary {
+    height: 32px;
+    min-height: 32px;
+    padding: 0 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+  }
+  .main:has(.cal-pin.has-day) { padding-top: 0; }
+  .cal-pin.has-day {
+    position: sticky;
+    top: 0;
+    z-index: 8;
+    isolation: isolate;
+    background: var(--bg);
+    margin: 0 -14px;
+    padding: 10px 14px 8px;
+  }
+  .cal-pin.has-day .cal-head { background: var(--bg); }
+  .calendar.cal-fold {
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    background: var(--paper);
+  }
+  .calendar.cal-fold .cal-weeks {
+    grid-auto-rows: var(--cal-row, 48px);
+  }
+  .calendar.cal-fold .cal-body {
+    overflow: hidden;
+  }
+  .calendar.cal-fold .day,
+  .calendar.cal-fold .day.empty {
+    height: var(--cal-row, 48px);
+    min-height: var(--cal-row, 48px);
+    max-height: var(--cal-row, 48px);
+  }
+
+  /* 账单筛选默认只留搜索；点开后再铺两列，不要八个输入框占满首屏 */
+  .h5-only { display: inline-flex; }
+  .search-row { align-items: stretch; gap: 8px; padding: 10px 12px; }
+  .search-row:not(.open) > label:not(.grow) { display: none; }
+  .search-row:not(.open) > label.grow { font-size: 0; gap: 0; }
+  .search-row:not(.open) > label.grow input { font-size: 16px; }
+  .h5-filter-btn {
+    order: 3;
+    justify-content: center;
+    align-items: center;
+    width: 100%;
+    min-height: 40px;
+    border: 1px solid var(--field-line);
+    background: var(--field);
+    color: var(--ink);
+    border-radius: 999px;
+    font-size: 14px;
+  }
+  .h5-filter-btn.has { color: var(--coral-dark); background: var(--wash-coral); border-color: transparent; }
+  .search-row > .primary { order: 2; width: auto; align-self: stretch; padding-inline: 18px; }
+  .search-row > label.grow { order: 1; flex: 1 1 auto; min-width: 0; }
+  .search-row:not(.open) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 8px;
+  }
+  .search-row:not(.open) > .h5-filter-btn {
+    grid-column: auto;
+    width: auto;
+    align-self: center;
+    height: 40px;
+    min-height: 40px;
+    padding: 0 12px;
+    border-radius: 12px;
+  }
+  .search-row:not(.open) > .primary {
+    align-self: center;
+    height: 40px;
+    min-height: 0;
+    padding: 0 14px;
+    border-radius: 12px;
+  }
+  .search-row:not(.open) > label.grow input { height: 40px; min-height: 40px; }
+  .search-row:not(.open) > .ghost { grid-column: 1 / -1; justify-self: start; }
+  .search-row.open {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 10px;
+  }
+  .search-row.open > label,
+  .search-row.open > .primary,
+  .search-row.open > .ghost,
+  .search-row.open > .h5-filter-btn { order: 0; }
+  .search-row.open > label { display: flex; min-width: 0; }
+  .search-row.open > label.grow,
+  .search-row.open > .primary,
+  .search-row.open > .ghost,
+  .search-row.open > .h5-filter-btn { grid-column: 1 / -1; }
+  .search-row.open > .primary { width: 100%; }
+  .search-row label { font-size: 12px; }
+  .query-count { margin-top: 8px; font-size: 12px; }
+
+  .h5-tabs {
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 30;
+    padding: 2px calc(4px + var(--safe-right)) calc(2px + var(--safe-bottom)) calc(4px + var(--safe-left));
+    background: var(--topbar);
+    backdrop-filter: blur(16px);
+    border-top: 1px solid var(--line);
+  }
+  .h5-tabs a,
+  .h5-tabs button {
+    flex: 1;
+    min-width: 0;
+    min-height: 52px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    font-size: 11px;
+    padding: 4px 0 2px;
+    border-radius: 10px;
+  }
+  .h5-tabs a.active,
+  .h5-tabs button.active { color: var(--coral-dark); font-weight: 600; }
+  .h5-tabs a:active,
+  .h5-tabs button:active { background: var(--hover); }
+
+  .h5-sheet-backdrop {
+    display: block;
+    position: fixed;
+    z-index: 31;
+    top: 0;
+    right: 0;
+    left: 0;
+    bottom: calc(var(--h5-tab-h) + var(--safe-bottom));
+    border: 0;
+    padding: 0;
+    background: rgba(12, 8, 20, 0.45);
+  }
+  .h5-sheet {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    position: fixed;
+    z-index: 32;
+    left: 10px;
+    right: 10px;
+    bottom: calc(var(--h5-tab-h) + var(--safe-bottom) + 8px);
+    max-height: min(70dvh, calc(100dvh - var(--h5-tab-h) - var(--safe-top) - 80px));
+    overflow-y: auto;
+    padding: 14px;
+    border-radius: 18px;
+    border: 1px solid var(--line);
+    background: var(--paper);
+    box-shadow: var(--shadow);
+  }
+  .h5-sheet-user { display: flex; align-items: center; gap: 8px; }
+  .h5-sheet-user .me-name { flex: 1; }
+  .h5-sheet .theme-switch { align-self: stretch; }
+  .h5-sheet .theme-switch button { flex: 1; min-height: 36px; }
+  .h5-sheet-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  /* 顶栏已经有账本名，页眉再写一遍会挤掉标题 */
+  .page-eyebrow { display: none; }
+  .h5-sheet-grid a {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 68px;
+    padding: 8px 4px;
+    border-radius: 14px;
+    background: var(--soft);
+    color: var(--ink);
+    font-size: 12px;
+  }
+  .h5-sheet-grid a.active { background: var(--wash-coral); color: var(--coral-dark); font-weight: 600; }
+  .h5-sheet-backdrop ~ .fab { visibility: hidden; }
+
+  /* 键盘弹起时底栏会挡输入框，收起来 */
+  html[data-keyboard='1'] .h5-tabs,
+  html[data-keyboard='1'] .h5-sheet,
+  html[data-keyboard='1'] .h5-sheet-backdrop,
+  html[data-keyboard='1'] .fab { display: none; }
+  html[data-keyboard='1'] .main { padding-bottom: calc(16px + var(--safe-bottom)); }
+
+  /* 免登录补账页很长，不要被登录页的垂直居中裁掉顶部 */
+  .auth:has(.share-page) {
+    display: block;
+    padding: calc(16px + var(--safe-top)) calc(12px + var(--safe-right)) calc(24px + var(--safe-bottom)) calc(12px + var(--safe-left));
+  }
+  .share-page { width: 100%; }
+
+  /* 手机上收成一屏能看完的记账页，不要再把桌面卡片一层层堆乱 */
+  .h5-tabs a.active,
+  .h5-tabs button.active { background: var(--wash-coral); }
+  .fab,
+  .fab::before,
+  .fab::after,
+  .fab-plus { animation: none; }
+  .fab::before,
+  .fab::after { display: none; }
+  .fab {
+    width: 52px;
+    height: 52px;
+    font-size: 28px;
+    right: 16px;
+    bottom: calc(var(--h5-tab-h) + 14px + var(--safe-bottom));
+    box-shadow: 0 8px 18px rgba(255, 77, 106, 0.32);
+  }
+  .hero { box-shadow: none; }
+  .hero-main { padding: 16px 16px 6px; }
+  .hero-value { font-size: 36px; }
+  .hero-split {
+    border-top: 0;
+    padding: 4px 16px 16px;
+    gap: 0;
+  }
+  .hero-cell { padding: 4px 0 0; }
+  .hero-cell + .hero-cell { border-left: 0; padding-left: 16px; }
+  .card, .trend-card { box-shadow: none; }
+  .trend-card { margin-top: 12px; }
+  .card-head h2 { font-size: 16px; }
+  .pie-wrap { flex-direction: column; align-items: center; }
+  .pie-legend { width: 100%; }
+  .query-count { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px 12px;
+    align-items: start;
+  }
+  .form-row > .field-full,
+  .form-row > label.book-aa-toggle,
+  .form-row > label:has(input[type="datetime-local"]) { grid-column: 1 / -1; }
+  .form-row > label { min-width: 0; }
+  .checks { display: flex; flex-wrap: wrap; gap: 8px 12px; }
+  input, select { min-height: 44px; border-radius: 12px; }
+  textarea { border-radius: 12px; }
+  .tx-row { grid-template-columns: 32px minmax(0, 1fr) auto; gap: 8px; padding: 12px 2px; }
+  .tx-title { white-space: nowrap; }
+  .tx-line { align-items: flex-start; }
+  .tx-line .tx-row {
+    position: relative;
+    grid-template-columns: 32px minmax(0, 1fr);
+    padding: 10px 0;
+  }
+  .tx-line .tx-side { position: absolute; top: 12px; right: 0; }
+  .tx-line .tx-title {
+    display: block;
+    padding-right: 96px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tx-line .tx-main .tiny {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tx-line .tx-del { margin-top: 14px; padding: 2px 0 2px 4px; }
+  .modal-backdrop { padding: 0; place-items: end center; }
+  .modal,
+  .modal.modal-wide,
+  .modal.modal-detail {
+    width: 100%;
+    max-width: 100%;
+    border-radius: 22px 22px 0 0;
+    max-height: min(86dvh, calc(100dvh - var(--safe-top) - 8px));
+    padding: 16px 16px calc(16px + var(--safe-bottom));
+  }
+  .modal.modal-detail .modal-actions { flex-wrap: nowrap; }
+  .modal.modal-detail .modal-actions > * { flex: 1 1 0; min-width: 0; }
+
+  /* 账本管理：不要再撑成一张必须横滑的宽表，一行账本收成一张卡片 */
+  .book-list-card { overflow: visible; }
+  .book-create .form-row label { min-width: 0; }
+  .book-table {
+    display: block;
+    min-width: 0;
+    width: 100%;
+    table-layout: auto;
+  }
+  .book-table thead { display: none; }
+  .book-table tbody { display: flex; flex-direction: column; gap: 10px; }
+  .book-table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px 8px;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: var(--soft);
+  }
+  .book-table td,
+  .book-table td:nth-child(n) {
+    display: block;
+    width: auto;
+    max-width: none;
+    padding: 0;
+    text-align: left;
+  }
+  .book-table td:nth-child(1) { grid-column: 1; min-width: 0; }
+  .book-table td:nth-child(2) { grid-column: 2; align-self: start; white-space: nowrap; }
+  .book-table td:nth-child(2) .tag { white-space: nowrap; }
+  .book-table td:nth-child(3),
+  .book-table td:nth-child(4),
+  .book-table td:nth-child(5) { grid-column: 1 / -1; }
+  .book-people-line { align-items: flex-start; width: 100%; }
+  .book-people-line span:last-child { min-width: 0; flex: 1; }
+  .book-actions-row { flex-wrap: wrap; justify-content: flex-start; }
+}
+
+/* 只在 App 里生效的规则（platform.ts 里打上 data-native） */
+html[data-native='1'] body { overscroll-behavior: none; }
+html[data-native='1'] button { touch-action: manipulation; }
+html[data-native='1'] input,
+html[data-native='1'] select,
+html[data-native='1'] textarea {
+  /* iOS 上字号小于 16px 时聚焦会自动放大整页 */
+  font-size: 16px;
+}
+html[data-native='1'] .sidenav { scrollbar-width: none; }
+html[data-native='1'] .sidenav::-webkit-scrollbar { display: none; }
+
+/* 登录页的服务器地址配置 */
+.server-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+.server-setup-actions { display: flex; align-items: center; gap: 10px; }
+.server-setup-actions .secondary { padding: 6px 14px; font-size: 13px; }
+.link-btn {
+  align-self: flex-start;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 4px 2px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.link-btn:hover { color: var(--ink); }

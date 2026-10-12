@@ -3,7 +3,7 @@
 自托管的个人 / 家庭记账本。支持多账本、共享账本免登录补账、账单导入与自动归类、定期账单、查重。
 
 - 后端：Node 22 + Express + `node:sqlite`
-- 前端：React 18 + Vite
+- 前端：React 19 + Vite + TypeScript（渐进迁移）+ Capacitor（iOS / Android）
 - 数据：单个 SQLite 文件，备份就是拷文件
 
 ## 功能
@@ -34,6 +34,97 @@ cd web && npm install && npm run dev
 ```
 
 打开 http://localhost:5173，注册第一个账号会自动成为管理员。
+
+## 手机 App（iOS / Android）
+
+前端是纯静态包，用 Capacitor 套一层原生壳，和网页端同一套代码、同一个后端。
+
+### 前置环境
+
+| 平台 | 需要 |
+| --- | --- |
+| iOS | macOS + Xcode 15+，再装 CocoaPods：`sudo gem install cocoapods` |
+| Android | Android Studio（自带 Android SDK）+ JDK 17 |
+
+### 生成原生工程
+
+```bash
+cd web
+npm install
+npm run cap:add:ios      # 生成 ios/
+npm run cap:add:android  # 生成 android/
+```
+
+之后每次改完前端：
+
+```bash
+npm run cap:sync     # 重新打包并同步到 ios/android
+npm run cap:ios      # 同步 + 打开 Xcode
+npm run cap:android  # 同步 + 打开 Android Studio
+```
+
+### 配置服务器地址
+
+App 是本地包，没有同源后端，必须告诉它服务器在哪：**登录页 →「服务器地址」**，填 `http://192.168.x.x:8080` 或你的域名。网页访问留空即可（走同源 / vite 代理）。地址存在原生 Preferences 里。
+
+### 内网 http 的额外配置
+
+**Android 9+** 默认禁止明文请求。新建 `android/app/src/main/res/xml/network_security_config.xml`：
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+  <domain-config cleartextTrafficPermitted="true">
+    <domain includeSubdomains="false">192.168.31.137</domain>
+  </domain-config>
+</network-security-config>
+```
+
+并在 `android/app/src/main/AndroidManifest.xml` 的 `<application>` 上加 `android:networkSecurityConfig="@xml/network_security_config"`。
+
+**iOS** 在 `ios/App/App/Info.plist` 加（换成你的地址）：
+
+```xml
+<key>NSAppTransportSecurity</key>
+<dict>
+  <key>NSExceptionDomains</key>
+  <dict>
+    <key>192.168.31.137</key>
+    <dict>
+      <key>NSExceptionAllowsInsecureHTTPLoads</key>
+      <true/>
+    </dict>
+  </dict>
+</dict>
+```
+
+用 https 域名的话这两段都不需要。
+
+### 已经做好的原生适配
+
+| 项 | 做法 |
+| --- | --- |
+| 刘海 / 状态栏 | 状态栏 overlay，顶部留白用 `env(safe-area-inset-top)` |
+| 底部小黑条 | `env(safe-area-inset-bottom)`，悬浮按钮和正文底部都让位 |
+| 地址栏抖动 | `100dvh` 替代 `100vh` |
+| Android 返回键 | 先广播给页面（关弹窗），没人处理才退出 |
+| 键盘 | native resize，隐藏 iOS 键盘上方工具条 |
+| 深链接 | `/share/<token>` 这类链接交给前端路由 |
+| 输入框自动放大 | App 内输入框 16px，避开 iOS 聚焦缩放 |
+| 橡皮筋 / 双击缩放 | `overscroll-behavior`、`touch-action` |
+
+### 上架注意
+
+纯 WebView 壳容易被 iOS 4.2（最低限度功能）拒。至少加一点原生能力：Face ID / 指纹解锁、推送、相机扫票据、离线可用。
+
+## TypeScript 迁移路线
+
+`web/src/App.jsx` 还是 4500 行的 JS 单体文件，一次性转 TS 风险太大，所以走渐进路线：
+
+- `tsconfig.json` 开了 `allowJs`，新旧文件共存，互不影响
+- 新代码一律 `.ts` / `.tsx`：`api.ts`（请求层）、`types.ts`（领域模型）、`platform.ts`（原生壳）、`main.tsx`（入口）
+- `npm run typecheck` 目前只校验 TS 文件（`checkJs` 关着）
+- 下一步：按页面把 `App.jsx` 拆成 `src/pages/*.tsx`，拆一个转一个，全部转完再把 `checkJs` 打开
 
 ## Docker 部署
 
@@ -146,9 +237,14 @@ server/          后端（Express + SQLite）
   src/books.js      账本、成员、分享 token
   src/recurring.js  定期账单
   src/duplicates.js 查重
-web/             前端（React + Vite）
-  src/App.jsx       全部页面
-  src/styles.css    样式
+web/             前端（React 19 + Vite + TS）
+  src/App.jsx       全部页面（待按页面拆分并转 TS）
+  src/main.tsx      入口 + 原生壳初始化
+  src/api.ts        请求层（后端地址、token、全局 loading）
+  src/platform.ts   Capacitor 能力（状态栏/键盘/返回键/深链接）
+  src/types.ts      领域模型
+  src/styles.css    样式（含移动端与原生壳适配）
+  capacitor.config.ts
 scripts/export-db.mjs  本地库 → 数据目录快照
 scripts/deploy.sh      从 git 拉取并启动/更新（写入 .env 配置）
 deploy.conf.example    启动配置模板，复制成 deploy.conf 后填自己的值

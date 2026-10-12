@@ -1,6 +1,8 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { NavLink, Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
-import { api, getToken, setToken, subscribeBusy, track } from './api.js';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { api, apiUrl, getApiBase, setApiBase, getToken, setToken, subscribeBusy, track } from './api';
+import { isNative } from './platform';
 
 const TYPES = [
   ['expense', '支出'],
@@ -106,13 +108,37 @@ function useRefresh() {
   return useContext(RefreshContext);
 }
 
+// 手机上真正滚动的是 .main，只锁 body 的话弹窗背后还能滑。
+// 详情弹窗会锁两次，后一次记下的是已经锁上的 hidden。若按后记的值还原，关掉弹窗后整页就滑不动。
+let scrollLocks = 0;
+let scrollBody = '';
+let scrollMains = [];
+function lockPageScroll() {
+  if (scrollLocks === 0) {
+    scrollBody = document.body.style.overflow;
+    scrollMains = [...document.querySelectorAll('.main')].map((el) => [el, el.style.overflow]);
+    document.body.style.overflow = 'hidden';
+    scrollMains.forEach(([el]) => { el.style.overflow = 'hidden'; });
+  }
+  scrollLocks += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    scrollLocks -= 1;
+    if (scrollLocks > 0) return;
+    scrollLocks = 0;
+    document.body.style.overflow = scrollBody;
+    scrollMains.forEach(([el, overflow]) => { el.style.overflow = overflow; });
+    scrollMains = [];
+  };
+}
+
 // 弹窗打开时锁住背景滚动：不锁的话滚轮会带着后面的页面一起动
 function useScrollLock(active) {
   useEffect(() => {
     if (!active) return undefined;
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = previous; };
+    return lockPageScroll();
   }, [active]);
 }
 
@@ -197,6 +223,7 @@ const ICONS = {
   copy: ['M9 9h11v11H9z', 'M5 15H4V4h11v1'],
   book: ['M5 3h15v18H5z', 'M5 3a2.5 2.5 0 0 0 0 18', 'M9.5 7h6', 'M9.5 11h6'],
   users: ['M17 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8', 'M22 21v-2a4 4 0 0 0-3-3.9', 'M16 3.2a4 4 0 0 1 0 7.6'],
+  grid: ['M4 4h6.5v6.5H4z', 'M13.5 4H20v6.5h-6.5z', 'M4 13.5h6.5V20H4z', 'M13.5 13.5H20V20h-6.5z'],
 };
 
 function Icon({ name, size = 18 }) {
@@ -226,9 +253,11 @@ function stringToColor(str) {
 
 function BookSwitch({ books, currentBookId, onChange }) {
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   useScrollLock(open);
+  useEffect(() => { setOpen(false); }, [pathname]);
   useEffect(() => {
     if (!open) return undefined;
     function onKey(e) { if (e.key === 'Escape') setOpen(false); }
@@ -249,7 +278,7 @@ function BookSwitch({ books, currentBookId, onChange }) {
         </span>
         <span className="book-caret">▾</span>
       </button>
-      {open && (
+      {open && createPortal(
         <div className="modal-backdrop" onClick={() => setOpen(false)}>
           <div
             className="modal book-switch-modal stack"
@@ -259,7 +288,12 @@ function BookSwitch({ books, currentBookId, onChange }) {
             onClick={(event) => event.stopPropagation()}
           >
             <h2>切换账本</h2>
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索账本…" autoFocus />
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="搜索账本…"
+              autoFocus={window.matchMedia('(min-width: 901px)').matches}
+            />
             <div className="book-switch-list">
               {filtered.map((book) => (
                 <button
@@ -288,7 +322,8 @@ function BookSwitch({ books, currentBookId, onChange }) {
               <button className="secondary" type="button" onClick={() => setOpen(false)}>关闭</button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
@@ -296,15 +331,36 @@ function BookSwitch({ books, currentBookId, onChange }) {
 
 function Shell({ user, onLogout, onSaved, children }) {
   const [creating, setCreating] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const { pathname } = useLocation();
   const books = useBooksSource();
   const { books: bookList, currentBookId, setCurrentBookId } = books;
   const groups = navGroups(user.isAdmin);
+  const primary = groups[0].items;
+  const moreItems = groups.slice(1).flatMap((group) => group.items);
+  const moreActive = moreItems.some(([to]) => pathname === to);
+  useScrollLock(moreOpen);
+  useEffect(() => { setMoreOpen(false); }, [pathname]);
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 900px)');
+    function onChange() { if (!media.matches) setMoreOpen(false); }
+    media.addEventListener('change', onChange);
+    return () => media.removeEventListener('change', onChange);
+  }, []);
+  useEffect(() => {
+    if (!moreOpen) return undefined;
+    function onKey(event) { if (event.key === 'Escape') setMoreOpen(false); }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [moreOpen]);
   return (
     <BooksContext.Provider value={books}>
       <div className="app-shell">
         <aside className="sidebar">
-          <div className="brand">轻账单<span className="brand-sub">LEDGER</span></div>
-          <BookSwitch books={bookList} currentBookId={currentBookId} onChange={setCurrentBookId} />
+          <div className="sidebar-head">
+            <div className="brand">轻账单<span className="brand-sub">LEDGER</span></div>
+            <BookSwitch books={bookList} currentBookId={currentBookId} onChange={setCurrentBookId} />
+          </div>
           <nav className="sidenav">
             {groups.map((group) => (
               <div className="nav-group" key={group.title}>
@@ -328,13 +384,95 @@ function Shell({ user, onLogout, onSaved, children }) {
             </div>
           </div>
         </aside>
+        <header className="h5-bar">
+          <div className="brand">轻账单</div>
+          <BookSwitch books={bookList} currentBookId={currentBookId} onChange={setCurrentBookId} />
+        </header>
         <main className="main">{children}</main>
+        <nav className="h5-tabs" aria-label="主导航">
+          {primary.map(([to, label, icon]) => (
+            <NavLink key={to} to={to} end={to === '/'}>
+              <Icon name={icon} size={22} />
+              <span>{label}</span>
+            </NavLink>
+          ))}
+          <button
+            type="button"
+            className={moreOpen || moreActive ? 'active' : ''}
+            aria-expanded={moreOpen}
+            aria-controls="h5-more"
+            onClick={() => setMoreOpen((open) => !open)}
+          >
+            <Icon name="grid" size={22} />
+            <span>更多</span>
+          </button>
+        </nav>
+        {moreOpen && (
+          <>
+            <button className="h5-sheet-backdrop" type="button" aria-label="关闭更多" onClick={() => setMoreOpen(false)} />
+            <div className="h5-sheet" id="h5-more" role="dialog" aria-label="更多">
+              <div className="h5-sheet-user">
+                <span className="me-avatar">{user.displayName.slice(0, 1)}</span>
+                <span className="me-name" title={user.displayName}>{user.displayName}{user.isAdmin ? ' · 管理员' : ''}</span>
+                <button className="ghost" type="button" onClick={onLogout}>退出</button>
+              </div>
+              <ThemeSwitch />
+              <div className="h5-sheet-grid">
+                {moreItems.map(([to, label, icon]) => (
+                  <NavLink key={to} to={to} onClick={() => setMoreOpen(false)}>
+                    <Icon name={icon} size={22} />
+                    <span>{label}</span>
+                  </NavLink>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
         <button className="fab" type="button" title="记一笔" aria-label="记一笔" onClick={() => setCreating(true)}>
           <span className="fab-plus">+</span>
         </button>
         <CreateBillModal open={creating} onClose={() => setCreating(false)} onSaved={onSaved} />
       </div>
     </BooksContext.Provider>
+  );
+}
+
+/**
+ * 服务器地址：网页访问留空走同源；手机 App 是本地包，必须指向 NAS / 服务器才能请求。
+ * 放在登录页是因为没配地址就连不上，登录后也能从侧栏「退出」旁边再改。
+ */
+function ServerSetup() {
+  const [open, setOpen] = useState(() => isNative || Boolean(getApiBase()));
+  const [url, setUrl] = useState(() => getApiBase());
+  const [hint, setHint] = useState('');
+  if (!open) {
+    return (
+      <button className="link-btn" type="button" onClick={() => setOpen(true)}>服务器地址</button>
+    );
+  }
+  return (
+    <div className="server-setup">
+      <label>
+        服务器地址
+        <input
+          value={url}
+          onChange={(event) => { setUrl(event.target.value); setHint(''); }}
+          placeholder="http://192.168.1.10:8080"
+          inputMode="url"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
+        />
+      </label>
+      <div className="server-setup-actions">
+        <button className="secondary" type="button" onClick={() => { setApiBase(url); setHint('已保存，重新登录生效'); }}>
+          保存
+        </button>
+        <button className="link-btn" type="button" onClick={() => setOpen(false)}>收起</button>
+      </div>
+      {hint && <p className="muted">{hint}</p>}
+      <p className="muted">手机 App 填 NAS / 服务器的地址（含端口）；网页访问留空。</p>
+    </div>
   );
 }
 
@@ -380,6 +518,7 @@ function AuthScreen({ onLogin }) {
             {mode === 'login' ? '没有账号，去注册' : '已有账号，去登录'}
           </button>
         )}
+        <ServerSetup />
       </form>
     </div>
   );
@@ -719,7 +858,7 @@ const BILL_SORTS = [
 async function fetchExport(format, query = '') {
   const params = new URLSearchParams(String(query).replace(/^\?/, ''));
   params.set('format', format);
-  const response = await track(fetch(`/api/export?${params}`, {
+  const response = await track(fetch(apiUrl(`/api/export?${params}`), {
     headers: { Authorization: `Bearer ${getToken()}` },
   }));
   if (!response.ok) {
@@ -760,12 +899,7 @@ function ClearBills({ onClose, onCleared, currentBook, bookId, bookQuery }) {
       if (event.key === 'Escape' && !busy) onClose();
     }
     document.addEventListener('keydown', onKey);
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      document.body.style.overflow = previous;
-    };
+    return () => document.removeEventListener('keydown', onKey);
   }, [onClose, busy]);
   async function submit(event) {
     event.preventDefault();
@@ -819,12 +953,7 @@ function BillDetail({ tx, onClose, onDelete, onSave }) {
       if (event.key === 'Escape') onClose();
     }
     document.addEventListener('keydown', onKey);
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      document.body.style.overflow = previous;
-    };
+    return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
   const flag = billFlag(tx);
@@ -887,7 +1016,7 @@ function BillDetail({ tx, onClose, onDelete, onSave }) {
     }
   }
 
-  return (
+  return createPortal(
     <div className="modal-backdrop" onClick={onClose}>
       <div
         className={`modal ${editing ? 'modal-wide' : 'modal-detail'}`}
@@ -960,7 +1089,8 @@ function BillDetail({ tx, onClose, onDelete, onSave }) {
           </>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -1293,7 +1423,7 @@ function Overview() {
           <span className="page-eyebrow">{books.currentBook ? books.currentBook.name : '全部账本'}</span>
           <h1>{win.label}</h1>
         </div>
-        <div className="row" style={{ flexWrap: 'wrap' }}>
+        <div className="row ov-tools">
           <div className="segment" role="tablist">
             {TREND_RANGES.map(([value, label]) => (
               <button
@@ -1313,10 +1443,10 @@ function Overview() {
             </>
           )}
           {range !== 'all' && range !== 'custom' && (
-            <>
+            <div className="row month-nav">
               <button className="secondary" type="button" onClick={() => shift(-1)}>{range === 'month' ? '上个月' : '前一月'}</button>
               <button className="secondary" type="button" onClick={() => shift(1)}>{range === 'month' ? '下个月' : '后一月'}</button>
-            </>
+            </div>
           )}
         </div>
       </div>
@@ -1343,26 +1473,28 @@ function Overview() {
             <h2>AA 平摊</h2>
             <span className="tiny muted">总花费 {money(aa.total)} · {aa.memberCount} 人分摊</span>
           </div>
-          <table className="aa-table">
-            <thead>
-              <tr><th>成员</th><th>已付</th><th>应摊</th><th>差额</th></tr>
-            </thead>
-            <tbody>
-              {aa.members.map((item) => {
-                const diff = Number(item.diff);
-                return (
-                  <tr key={item.name}>
-                    <td>{item.name}</td>
-                    <td>{money(item.paid)}</td>
-                    <td>{money(item.share)}</td>
-                    <td className={diff > 0 ? 'income' : diff < 0 ? 'expense' : 'muted'}>
-                      {diff > 0 ? `应收 ${money(item.diff)}` : diff < 0 ? `应付 ${money(-diff)}` : '已平'}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <div className="table-scroll">
+            <table className="aa-table">
+              <thead>
+                <tr><th>成员</th><th>已付</th><th>应摊</th><th>差额</th></tr>
+              </thead>
+              <tbody>
+                {aa.members.map((item) => {
+                  const diff = Number(item.diff);
+                  return (
+                    <tr key={item.name}>
+                      <td>{item.name}</td>
+                      <td>{money(item.paid)}</td>
+                      <td>{money(item.share)}</td>
+                      <td className={diff > 0 ? 'income' : diff < 0 ? 'expense' : 'muted'}>
+                        {diff > 0 ? `应收 ${money(item.diff)}` : diff < 0 ? `应付 ${money(-diff)}` : '已平'}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
           {aa.transfers.length > 0 && (
             <div className="aa-transfers">
               <h3>结算建议</h3>
@@ -1542,6 +1674,7 @@ function CalendarPage() {
   const [picked, setPicked] = useState('');
   const [items, setItems] = useState([]);
   const [open, setOpen] = useState(null);
+  const calRef = useRef(null);
   useEffect(() => {
     api(`/api/calendar?year=${cursor.year}&month=${cursor.month}&${bookQuery}`).then((data) => setDays(data.days));
   }, [cursor, bookQuery, saved]);
@@ -1556,6 +1689,88 @@ function CalendarPage() {
   const cells = [...Array(lead).fill(null), ...Array.from({ length: count }, (_, i) => i + 1)];
   const today = new Date();
   const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  const weekCount = Math.ceil(cells.length / 7);
+  const pickedWeek = picked ? Math.floor((lead + Number(picked.slice(-2)) - 1) / 7) : 0;
+  useLayoutEffect(() => {
+    const main = document.querySelector('.main');
+    const root = calRef.current;
+    if (!main || !root) return undefined;
+    const body = root.querySelector('.cal-body');
+    const weeks = root.querySelector('.cal-weeks');
+    const narrow = window.matchMedia('(max-width: 900px)');
+    let rowH = 0;
+    let full = 0;
+    let collapsed = false;
+    let lockUntil = 0;
+    let ignoreUntil = 0;
+    let baseTop = 0;
+
+    function clearFold() {
+      collapsed = false;
+      lockUntil = 0;
+      ignoreUntil = 0;
+      root.classList.remove('cal-fold');
+      root.style.removeProperty('--cal-row');
+      if (!body || !weeks) return;
+      body.style.transition = '';
+      body.style.overflow = '';
+      body.style.height = '';
+      weeks.style.transition = '';
+      weeks.style.transform = '';
+    }
+    // 选中当天只锁定行高，不播高度动画。列表一出现就会带动滚动，若马上跟着收起，日历就会上下抖。
+    function measure() {
+      clearFold();
+      if (!body || !weeks || !narrow.matches || !picked) return;
+      body.style.height = 'auto';
+      weeks.style.transform = 'none';
+      const slots = [...weeks.querySelectorAll(':scope > .day')];
+      const stride = slots.length > 7 ? slots[7].offsetTop - slots[0].offsetTop : 0;
+      rowH = stride > 1 ? stride : (slots[0] ? slots[0].offsetHeight : 48);
+      if (rowH < 1) rowH = 48;
+      full = body.offsetHeight;
+      root.style.setProperty('--cal-row', `${rowH}px`);
+      root.classList.add('cal-fold');
+      body.style.overflow = 'hidden';
+      body.style.height = `${full}px`;
+      weeks.style.transform = 'translateY(0px)';
+      baseTop = main.scrollTop;
+      ignoreUntil = performance.now() + 450;
+    }
+    function armMotion() {
+      if (body.style.transition) return;
+      body.style.transition = 'height .28s ease';
+      weeks.style.transition = 'transform .28s ease';
+    }
+    function setCollapsed(next) {
+      if (next === collapsed || rowH < 1) return;
+      collapsed = next;
+      lockUntil = performance.now() + 340;
+      armMotion();
+      body.style.height = `${next ? rowH : full}px`;
+      weeks.style.transform = next ? `translateY(${-pickedWeek * rowH}px)` : 'translateY(0px)';
+    }
+    function onScroll() {
+      if (!narrow.matches || !picked || rowH < 1) return;
+      const now = performance.now();
+      if (now < ignoreUntil) {
+        baseTop = main.scrollTop;
+        return;
+      }
+      if (now < lockUntil) return;
+      const top = main.scrollTop;
+      if (!collapsed && top > baseTop + 24) setCollapsed(true);
+      else if (collapsed && top < 1) setCollapsed(false);
+    }
+    measure();
+    main.addEventListener('scroll', onScroll, { passive: true });
+    narrow.addEventListener('change', measure);
+    return () => {
+      main.removeEventListener('scroll', onScroll);
+      narrow.removeEventListener('change', measure);
+      clearFold();
+    };
+  }, [picked, pickedWeek, weekCount]);
   function shift(delta) {
     const d = new Date(cursor.year, cursor.month - 1 + delta, 1);
     setCursor({ year: d.getFullYear(), month: d.getMonth() + 1 });
@@ -1577,44 +1792,66 @@ function CalendarPage() {
   }
   return (
     <>
-      <div className="page-head">
-        <div>
-          <span className="page-eyebrow">{books.currentBook ? books.currentBook.name : '全部账本'}</span>
-          <h1>日历</h1>
+      <div className={`cal-pin${picked ? ' has-day' : ''}`}>
+        <div className="page-head cal-head">
+          <div>
+            <span className="page-eyebrow">{books.currentBook ? books.currentBook.name : '全部账本'}</span>
+            <h1>日历</h1>
+          </div>
+          <div className="row cal-nav">
+            <button className="secondary" type="button" onClick={() => shift(-1)}>上个月</button>
+            <strong>{cursor.year} 年 {cursor.month} 月</strong>
+            <button className="secondary" type="button" onClick={() => shift(1)}>下个月</button>
+          </div>
         </div>
-        <div className="row">
-          <button className="secondary" type="button" onClick={() => shift(-1)}>上个月</button>
-          <strong>{cursor.year} 年 {cursor.month} 月</strong>
-          <button className="secondary" type="button" onClick={() => shift(1)}>下个月</button>
-        </div>
-      </div>
-      <div className="calendar">
-        {WEEKDAYS.map((name) => <div className="dow" key={name}>{name}</div>)}
-        {cells.map((day, index) => {
-          if (!day) return <div className="day empty" key={`e${index}`} />;
-          const key = `${cursor.year}-${String(cursor.month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-          const info = map[key];
-          const cls = ['day'];
-          if (key === todayKey) cls.push('today');
-          if (key === picked) cls.push('picked');
-          return (
-            <div className={cls.join(' ')} key={key} role="button" tabIndex={0} onClick={() => setPicked(key)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setPicked(key); }}>
-              <button className="pick" type="button" tabIndex={-1}>{day}</button>
-              {info && Number(info.expense) > 0 && <div className="tiny expense">-{money(info.expense)}</div>}
-              {info && Number(info.income) > 0 && <div className="tiny income">+{money(info.income)}</div>}
-              {info?.planned?.length > 0 && <div className="tiny muted">待入账 {info.planned.length}</div>}
+        <div className="calendar" ref={calRef}>
+          <div className="cal-dows">
+            {WEEKDAYS.map((name) => <div className="dow" key={name}>{name}</div>)}
+          </div>
+          <div className="cal-body">
+            <div className="cal-weeks">
+            {cells.map((day, index) => {
+              if (!day) return <div className="day empty" key={`e${index}`} />;
+              const key = `${cursor.year}-${String(cursor.month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+              const info = map[key];
+              const cls = ['day'];
+              if (key === todayKey) cls.push('today');
+              if (key === picked) cls.push('picked');
+              return (
+                <div className={cls.join(' ')} key={key} role="button" tabIndex={0} onClick={() => setPicked(key)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setPicked(key); }}>
+                  <button className="pick" type="button" tabIndex={-1}>{day}</button>
+                  {(info && (Number(info.expense) > 0 || Number(info.income) > 0 || info.planned?.length > 0)) && (
+                    <div className="day-marks">
+                      {Number(info.expense) > 0 && <div className="tiny expense">-{money(info.expense)}</div>}
+                      {Number(info.income) > 0 && <div className="tiny income">+{money(info.income)}</div>}
+                      {info.planned?.length > 0 && <div className="tiny muted">待入账 {info.planned.length}</div>}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
             </div>
-          );
-        })}
+          </div>
+        </div>
+        {picked && (
+          <div className="cal-day-bar">
+            <h2>{picked}</h2>
+            <div className="row">
+              {sumOf('expense') > 0 && <span className="tiny expense">支出 {money(sumOf('expense'))}</span>}
+              {sumOf('income') > 0 && <span className="tiny income">收入 {money(sumOf('income'))}</span>}
+              <button className="secondary small" type="button" onClick={() => { setPicked(''); const main = document.querySelector('.main'); if (main) main.scrollTop = 0; }}>收起</button>
+            </div>
+          </div>
+        )}
       </div>
       {picked && (
-        <section className="card" style={{ marginTop: 16 }}>
+        <section className="card cal-day" style={{ marginTop: 16 }}>
           <div className="tree-head">
             <h2>{picked}</h2>
             <div className="row">
               {sumOf('expense') > 0 && <span className="tiny expense">支出 {money(sumOf('expense'))}</span>}
               {sumOf('income') > 0 && <span className="tiny income">收入 {money(sumOf('income'))}</span>}
-              <button className="secondary small" type="button" onClick={() => setPicked('')}>收起</button>
+              <button className="secondary small" type="button" onClick={() => { setPicked(''); const main = document.querySelector('.main'); if (main) main.scrollTop = 0; }}>收起</button>
             </div>
           </div>
           <div className="ledger">
@@ -1690,6 +1927,7 @@ function Bills() {
   const [bulkBusy, setBulkBusy] = useState(false);
   // 当前筛选条件下的金额合计（后端按全部匹配项统计，不只是已加载的）
   const [summary, setSummary] = useState(null);
+  const [filterOpen, setFilterOpen] = useState(false);
   const bookId = activeBookId || '';
   function queryString(overrides) {
     const params = new URLSearchParams();
@@ -1824,14 +2062,24 @@ function Bills() {
           <span className="page-eyebrow">{books.currentBook ? books.currentBook.name : '全部账本'}</span>
           <h1>账单</h1>
         </div>
-        <div className="row">
+        <div className="row page-actions">
           <button className="secondary" type="button" disabled={!!exporting} onClick={() => download('csv')}>{exporting === 'csv' ? '导出中' : '导出 CSV'}</button>
           <button className="secondary" type="button" disabled={!!exporting} onClick={() => download('xlsx')}>{exporting === 'xlsx' ? '导出中' : '导出 Excel'}</button>
           <button className="danger" type="button" disabled={!!exporting} onClick={() => setClearing(true)}>清除账单</button>
         </div>
       </div>
       {error && <div className="error">{error}</div>}
-      <form className="card row search-row" onSubmit={(e) => { e.preventDefault(); load().catch((err) => setError(err.message)); }}>
+      <form className={`card row search-row${filterOpen ? ' open' : ''}`} onSubmit={(e) => { e.preventDefault(); setFilterOpen(false); load().catch((err) => setError(err.message)); }}>
+        <button
+          className={`h5-only h5-filter-btn${[type, source, accountId, categoryId, from, to, minAmount, maxAmount].some(Boolean) ? ' has' : ''}`}
+          type="button"
+          onClick={() => setFilterOpen((open) => !open)}
+        >
+          {filterOpen ? '收起筛选' : '筛选'}
+          {[type, source, accountId, categoryId, from, to, minAmount, maxAmount].filter(Boolean).length
+            ? ` · ${[type, source, accountId, categoryId, from, to, minAmount, maxAmount].filter(Boolean).length}`
+            : ''}
+        </button>
         <label>类型
           <select value={type} onChange={(e) => setType(e.target.value)}>
             <option value="">全部</option>
@@ -1897,6 +2145,7 @@ function Bills() {
             onClick={() => {
               setType(''); setSource(''); setAccountId(''); setCategoryId(''); setFrom(''); setTo('');
               setMinAmount(''); setMaxAmount(''); setQ(''); setSort('');
+              setFilterOpen(false);
               load({ sort: '' }).catch((err) => setError(err.message));
             }}
           >
@@ -2298,11 +2547,10 @@ function SkippedRows({ file, onClose }) {
       if (event.key === 'Escape') onClose();
     }
     document.addEventListener('keydown', onKey);
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    const unlock = lockPageScroll();
     return () => {
       document.removeEventListener('keydown', onKey);
-      document.body.style.overflow = previous;
+      unlock();
     };
   }, [onClose]);
   return (
@@ -2544,7 +2792,7 @@ function ImportPage() {
   async function downloadTemplate(kind) {
     setError('');
     try {
-      const response = await fetch(`/api/import/template?kind=${kind}`, {
+      const response = await fetch(apiUrl(`/api/import/template?kind=${kind}`), {
         headers: { Authorization: `Bearer ${getToken()}` },
       });
       if (!response.ok) throw new Error('模板下载失败');
@@ -2599,7 +2847,8 @@ function ImportPage() {
         <form className="card stack" style={{ marginTop: 12 }} onSubmit={(e) => { e.preventDefault(); parseUploads([mappingFile.file], mapping, false).catch((err) => setError(err.message)); }}>
           <h2>映射 {mappingFile.filename}</h2>
           <p className="muted">还有 {pending.length} 个文件需要指定字段。{pending.length > 1 ? '映射完这个会继续下一个。' : ''}</p>
-          <div className="grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
+          {/* 宽屏两列，手机上自动塌成一列 */}
+          <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
             {MAP_FIELDS.map(([field, label]) => (
               <label key={field}>{label}
                 <select value={mapping[field] || ''} onChange={(e) => setMapping({ ...mapping, [field]: e.target.value })}>
@@ -4237,26 +4486,28 @@ function ShareAa({ aa }) {
         <h2>AA 平摊</h2>
         <span className="tiny muted">总 {money(aa.total)} · {aa.memberCount} 人分摊</span>
       </div>
-      <table className="aa-table">
-        <thead>
-          <tr><th>成员</th><th>已付</th><th>应摊</th><th>差额</th></tr>
-        </thead>
-        <tbody>
-          {aa.members.map((item) => {
-            const diff = Number(item.diff);
-            return (
-              <tr key={item.name}>
-                <td>{item.name}</td>
-                <td>{money(item.paid)}</td>
-                <td>{money(item.share)}</td>
-                <td className={diff > 0 ? 'income' : diff < 0 ? 'expense' : 'muted'}>
-                  {diff > 0 ? `应收 ${money(item.diff)}` : diff < 0 ? `应付 ${money(-diff)}` : '已平'}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      <div className="table-scroll">
+        <table className="aa-table">
+          <thead>
+            <tr><th>成员</th><th>已付</th><th>应摊</th><th>差额</th></tr>
+          </thead>
+          <tbody>
+            {aa.members.map((item) => {
+              const diff = Number(item.diff);
+              return (
+                <tr key={item.name}>
+                  <td>{item.name}</td>
+                  <td>{money(item.paid)}</td>
+                  <td>{money(item.share)}</td>
+                  <td className={diff > 0 ? 'income' : diff < 0 ? 'expense' : 'muted'}>
+                    {diff > 0 ? `应收 ${money(item.diff)}` : diff < 0 ? `应付 ${money(-diff)}` : '已平'}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
       {aa.transfers.length > 0 && (
         <div className="aa-transfers">
           <h3>结算建议</h3>
