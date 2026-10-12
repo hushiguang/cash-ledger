@@ -5,11 +5,11 @@ import https from 'node:https';
 import http from 'node:http';
 import { Buffer } from 'node:buffer';
 
-const HOST_URL = process.env.IMAGE_HOST_URL || 'https://image.coooo.tech:1443/api/index.php';
-const HOST_TOKEN = process.env.IMAGE_HOST_TOKEN || '1c17b11693cb5ec63859b091c5b9c1b2';
+const HOST_URL = process.env.IMAGE_HOST_URL || '';
+const HOST_TOKEN = process.env.IMAGE_HOST_TOKEN || '';
 // 图片代理只允许回源到图床，避免变成任意 URL 抓取
 const ALLOWED_HOSTS = new Set(
-  String(process.env.IMAGE_HOST_ALLOW_HOSTS || 'image.coooo.tech').split(',').map((s) => s.trim()).filter(Boolean),
+  String(process.env.IMAGE_HOST_ALLOW_HOSTS || '').split(',').map((s) => s.trim()).filter(Boolean),
 );
 const MAX_BYTES = 12 * 1024 * 1024;
 

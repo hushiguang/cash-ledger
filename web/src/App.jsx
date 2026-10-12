@@ -201,7 +201,7 @@ function CreateBillModal({ open, onClose, onSaved }) {
             requireMember={bookAaOn(books.currentBook)}
           />
         ) : (
-          <BookFields form={form} setForm={setForm} accounts={books.accounts} categories={books.categories} />
+          <BookFields form={form} setForm={setForm} accounts={books.accounts} categories={books.categories} showImages />
         )}
         <div className="modal-actions">
           <button className="secondary" type="button" onClick={onClose}>取消</button>
@@ -574,7 +574,7 @@ function withBook(query, bookQuery) {
   return query ? `${query}&${bookQuery}` : `?${bookQuery}`;
 }
 
-function BookFields({ form, setForm, accounts, categories, showTime = true }) {
+function BookFields({ form, setForm, accounts, categories, showTime = true, showImages = false }) {
   const cats = categories.filter((c) => !c.archived && c.kind === form.type);
   return (
     <div className="form-row wrap">
@@ -615,13 +615,57 @@ function BookFields({ form, setForm, accounts, categories, showTime = true }) {
       )}
       <label className="field-full">对方<input value={form.payee} onChange={(e) => setForm({ ...form, payee: e.target.value })} /></label>
       <label className="field-full">备注<textarea value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} /></label>
+      {showImages && (
+        <div className="field-full">
+          <span className="tiny muted">图片（选完自动传图床，最多 9 张）</span>
+          <ImagePicker images={form.images} onChange={(images) => setForm({ ...form, images })} />
+        </div>
+      )}
     </div>
   );
 }
 
-// 图片：选文件直接传图床，缩略图走服务端代理（图床是自签证书，浏览器直连会加载失败）
+// 图片：选文件直接传图床，缩略图走服务端代理（图床是自签证书，浏览器直连会加载失败）。
+// App 的页面在本地，必须带上后端地址，否则缩略图请求会打到 WebView 自己身上。
 function imageSrc(url) {
-  return `/api/image?u=${encodeURIComponent(url || '')}`;
+  return apiUrl(`/api/image?u=${encodeURIComponent(url || '')}`);
+}
+
+function ImageViewer({ src, onClose }) {
+  useScrollLock(true);
+  useEffect(() => {
+    function onKey(event) {
+      if (event.key === 'Escape') onClose();
+    }
+    function onBack(event) {
+      event.preventDefault();
+      onClose();
+    }
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('capacitor:back', onBack);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('capacitor:back', onBack);
+    };
+  }, [onClose]);
+  return createPortal(
+    <div className="image-viewer" role="dialog" aria-modal="true" aria-label="查看图片" onClick={onClose}>
+      <button className="image-viewer-close" type="button" onClick={onClose}>关闭</button>
+      <img src={src} alt="" onClick={(event) => event.stopPropagation()} />
+    </div>,
+    document.body,
+  );
+}
+
+function BillImage({ url }) {
+  const [open, setOpen] = useState(false);
+  const src = imageSrc(url);
+  return (
+    <>
+      <img src={src} alt="" onClick={() => setOpen(true)} />
+      {open && <ImageViewer src={src} onClose={() => setOpen(false)} />}
+    </>
+  );
 }
 
 function imageList(value) {
@@ -670,7 +714,7 @@ function ImagePicker({ images, onChange, uploadPath = '/api/upload/image', disab
         <div className="image-grid">
           {list.map((url) => (
             <span className="image-thumb" key={url}>
-              <img src={imageSrc(url)} alt="" onClick={() => window.open(imageSrc(url), '_blank')} />
+              <BillImage url={url} />
               <button type="button" className="chip-btn danger" title="移除" onClick={() => onChange(list.filter((item) => item !== url))}>✕</button>
             </span>
           ))}
@@ -1038,7 +1082,7 @@ function BillDetail({ tx, onClose, onDelete, onSave }) {
                 requireMember={bookAaOn(books.books.find((book) => book.id === tx.bookId))}
               />
             ) : (
-              <BookFields form={form} setForm={setForm} accounts={books.accounts} categories={books.categories} />
+              <BookFields form={form} setForm={setForm} accounts={books.accounts} categories={books.categories} showImages />
             )}
             {error && <div className="error">{error}</div>}
             <div className="modal-actions">
@@ -1060,11 +1104,7 @@ function BillDetail({ tx, onClose, onDelete, onSave }) {
             </dl>
             {tx.images?.length > 0 && (
               <div className="image-grid">
-                {tx.images.map((url) => (
-                  <a key={url} href={imageSrc(url)} target="_blank" rel="noreferrer">
-                    <img src={imageSrc(url)} alt="" />
-                  </a>
-                ))}
+                {tx.images.map((url) => <BillImage key={url} url={url} />)}
               </div>
             )}
             <div className="modal-actions">
@@ -3886,6 +3926,21 @@ function bookAaOn(book) {
   return !!book && (book.kind === 'aa' || !!book.aaEnabled);
 }
 
+// 分享链接要给别人打开。App 的页面在 https://localhost，不能拿这个当地址。
+// 页面本身在本机时，用已配置的服务器地址（那边同时提供网页）；否则用当前网站地址。
+function shareUrl(token) {
+  const base = getApiBase().replace(/\/+$/, '');
+  let origin = window.location.origin;
+  try {
+    const host = new URL(origin).hostname;
+    const local = host === 'localhost' || host === '127.0.0.1' || host === '::1';
+    if (local && /^https?:\/\//i.test(base)) origin = base;
+  } catch {
+    /* 地址解析失败就用当前页面 */
+  }
+  return `${origin}/share/${token}`;
+}
+
 // 账本编辑弹窗：改名/改类型、管参与人和协作成员、开关分享、归档、删除
 function BookEditModal({ book, onClose, onChanged }) {
   useScrollLock(true);
@@ -3904,7 +3959,7 @@ function BookEditModal({ book, onClose, onChanged }) {
   const people = bookPeopleNames(book);
   const presetIds = new Map((book.participants || []).map((item) => [item.name, item.id]));
   const billPeople = new Map((book.billPeople || []).map((item) => [item.name, item]));
-  const link = `${window.location.origin}/share/${book.shareToken}`;
+  const link = shareUrl(book.shareToken);
   // AA 开关：出游/家庭账本可以只记账不算账；AA 类型天生就是开的
   const [aaEnabled, setAaEnabled] = useState(!!book.aaEnabled);
   useEffect(() => { setAaEnabled(!!book.aaEnabled); }, [book.aaEnabled]);
@@ -3913,8 +3968,16 @@ function BookEditModal({ book, onClose, onChanged }) {
     function onKey(event) {
       if (event.key === 'Escape') onClose();
     }
+    function onBack(event) {
+      event.preventDefault();
+      onClose();
+    }
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('capacitor:back', onBack);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('capacitor:back', onBack);
+    };
   }, [onClose]);
 
   async function act(action) {
@@ -4010,9 +4073,10 @@ function BookEditModal({ book, onClose, onChanged }) {
     });
   }
 
-  return (
+  return createPortal(
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal modal-wide stack" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+      <div className="modal modal-wide stack modal-book" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+        <div className="modal-book-body">
         <h2>编辑账本</h2>
         {error && <div className="error">{error}</div>}
         <form className="form-row wrap" onSubmit={save}>
@@ -4151,7 +4215,8 @@ function BookEditModal({ book, onClose, onChanged }) {
             {book.shareEnabled && <p className="book-link">免登录链接：{link}</p>}
           </div>
         )}
-        <div className="book-actions">
+        </div>
+        <div className="book-actions book-actions-foot">
           {!personal && (
             <button
               className="secondary small"
@@ -4178,7 +4243,8 @@ function BookEditModal({ book, onClose, onChanged }) {
           onConfirm={confirm.onConfirm}
         />
       )}
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -4234,13 +4300,13 @@ function BooksPage() {
     run(
       () => api(`/api/books/${book.id}/share`, { method: 'POST', body: { enabled: !book.shareEnabled } }),
       (result) => (result.book.shareEnabled
-        ? `分享已开启：${window.location.origin}/share/${result.book.shareToken}`
+        ? `分享已开启：${shareUrl(result.book.shareToken)}`
         : '分享已关闭，旧链接失效'),
     );
   }
 
   function copyLink(book) {
-    const link = `${window.location.origin}/share/${book.shareToken}`;
+    const link = shareUrl(book.shareToken);
     navigator.clipboard?.writeText(link);
     setNotice(`链接已复制：${link}`);
   }
@@ -4274,7 +4340,7 @@ function BooksPage() {
   function BookRow({ book }) {
     const manage = book.role === 'owner' || book.role === 'admin';
     const personal = book.kind === 'personal';
-    const link = `${window.location.origin}/share/${book.shareToken}`;
+    const link = shareUrl(book.shareToken);
     return (
       <tr className={book.id === currentBookId ? 'active' : ''}>
         <td>
@@ -4718,11 +4784,7 @@ function SharePage() {
                     <div className="tiny muted">{sub}</div>
                     {item.images?.length > 0 && (
                       <div className="image-grid">
-                        {item.images.map((url) => (
-                          <a key={url} href={imageSrc(url)} target="_blank" rel="noreferrer">
-                            <img src={imageSrc(url)} alt="" />
-                          </a>
-                        ))}
+                        {item.images.map((url) => <BillImage key={url} url={url} />)}
                       </div>
                     )}
                   </div>
