@@ -1762,6 +1762,53 @@ html, body { overscroll-behavior-y: none; }
     padding: calc(16px + var(--safe-top)) calc(12px + var(--safe-right)) calc(24px + var(--safe-bottom)) calc(12px + var(--safe-left));
   }
   .share-page { width: 100%; }
+  /* 总支出/收入收到表单上面，滑的时候钉成一行；饼图留在桌面侧栏 */
+  .auth:has(.share-summary-card) {
+    padding-top: calc(40px + var(--safe-top));
+  }
+  .share-summary-card {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 20;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    border-bottom: 1px solid var(--line);
+    box-shadow: none;
+    background: var(--bg);
+    padding: calc(8px + var(--safe-top)) calc(12px + var(--safe-right)) 8px calc(12px + var(--safe-left));
+  }
+  .share-summary-card .card-head,
+  .share-summary-card .share-pie,
+  .share-summary-card > p { display: none; }
+  .share-summary-card .share-summary-nums {
+    display: flex;
+    gap: 8px;
+    margin: 0;
+    text-align: left;
+  }
+  .share-summary-card .share-summary-nums > div {
+    flex: 1 1 0;
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    gap: 4px;
+  }
+  .share-summary-card .share-summary-nums span {
+    display: inline;
+    margin: 0;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .share-summary-card .share-summary-nums b {
+    font-size: 15px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 
   /* 手机上收成一屏能看完的记账页，不要再把桌面卡片一层层堆乱 */
   .h5-tabs a.active,
