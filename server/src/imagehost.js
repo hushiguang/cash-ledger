@@ -7,9 +7,24 @@ import { Buffer } from 'node:buffer';
 
 const HOST_URL = process.env.IMAGE_HOST_URL || '';
 const HOST_TOKEN = process.env.IMAGE_HOST_TOKEN || '';
-// 图片代理只允许回源到图床，避免变成任意 URL 抓取
+
+function hostOf(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  try {
+    const withScheme = /^https?:\/\//i.test(text) ? text : `https://${text}`;
+    return new URL(withScheme).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+// 图片代理只允许回源到图床，避免变成任意 URL 抓取。
+// 没单独配白名单时，默认放行 IMAGE_HOST_URL 的主机（含端口，例如 image.coooo.tech:1443）。
 const ALLOWED_HOSTS = new Set(
-  String(process.env.IMAGE_HOST_ALLOW_HOSTS || '').split(',').map((s) => s.trim()).filter(Boolean),
+  [HOST_URL, ...String(process.env.IMAGE_HOST_ALLOW_HOSTS || '').split(',')]
+    .map(hostOf)
+    .filter(Boolean),
 );
 const MAX_BYTES = 12 * 1024 * 1024;
 
@@ -69,7 +84,7 @@ export async function uploadImage({ buffer, mimetype, filename }) {
 export function isAllowedImageUrl(url) {
   try {
     const parsed = new URL(String(url));
-    return (parsed.protocol === 'https:' || parsed.protocol === 'http:') && ALLOWED_HOSTS.has(parsed.hostname);
+    return (parsed.protocol === 'https:' || parsed.protocol === 'http:') && ALLOWED_HOSTS.has(parsed.hostname.toLowerCase());
   } catch {
     return false;
   }
