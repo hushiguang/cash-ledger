@@ -104,14 +104,23 @@ function AppSelect({ value, onChange, disabled, required, children }) {
   const buttonRef = useRef(null);
   const [box, setBox] = useState(null);
   const options = [];
-  Children.forEach(children, (child) => {
+  function pushOption(child, group) {
     if (!child || child.type !== 'option') return;
     const raw = child.props.value;
     options.push({
       value: raw == null ? optionText(child.props.children) : String(raw),
       label: optionText(child.props.children),
       disabled: !!child.props.disabled,
+      group,
     });
+  }
+  Children.forEach(children, (child) => {
+    if (!child) return;
+    if (child.type === 'optgroup') {
+      Children.forEach(child.props.children, (option) => pushOption(option, child.props.label || ''));
+      return;
+    }
+    pushOption(child, '');
   });
   const current = options.find((item) => item.value === String(value ?? ''));
 
@@ -181,18 +190,22 @@ function AppSelect({ value, onChange, disabled, required, children }) {
             style={{ left: box?.left, width: box?.width, top: box?.top, bottom: box?.bottom, maxHeight: box?.maxHeight }}
           >
             {options.map((item, index) => (
-              <button
-                key={`${item.value}-${index}`}
-                type="button"
-                role="option"
-                aria-selected={item.value === String(value ?? '')}
-                className={`app-select-option${item.value === String(value ?? '') ? ' active' : ''}`}
-                disabled={item.disabled}
-                onClick={() => pick(item.value)}
-              >
-                <span>{item.label}</span>
-                {item.value === String(value ?? '') && <span className="app-select-check" aria-hidden="true">✓</span>}
-              </button>
+              <div key={`${item.group}-${item.value}-${index}`}>
+                {item.group && item.group !== options[index - 1]?.group && (
+                  <div className="app-select-group">{item.group}</div>
+                )}
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={item.value === String(value ?? '')}
+                  className={`app-select-option${item.value === String(value ?? '') ? ' active' : ''}`}
+                  disabled={item.disabled}
+                  onClick={() => pick(item.value)}
+                >
+                  <span>{item.label}</span>
+                  {item.value === String(value ?? '') && <span className="app-select-check" aria-hidden="true">✓</span>}
+                </button>
+              </div>
             ))}
           </div>
         </>,
@@ -399,27 +412,29 @@ function CreateBillModal({ open, seed, onClose, onSaved }) {
 
   return createPortal(
     <div className="modal-backdrop" onClick={onClose}>
-      <form className="modal modal-wide modal-grow stack" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()} onSubmit={submit}>
+      <form className="modal modal-wide modal-grow bill-edit bill-edit-form" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()} onSubmit={submit}>
         <h2>记一笔{books.currentBook ? ` · ${books.currentBook.name}` : ''}</h2>
-        {hint && <p className="tiny muted">{hint}</p>}
-        {isNative && seed?.source && (
-          <button className="secondary" type="button" onClick={() => { void openPayApp(seed.source); }}>
-            {seed.source === 'alipay' ? '去支付宝识别详情' : '去微信识别详情'}
-          </button>
-        )}
-        {error && <div className="error">{error}</div>}
-        {shared ? (
-          <SharedBillFields
-            form={form}
-            setForm={setForm}
-            accounts={books.accounts}
-            categories={books.categories}
-            participants={bookPeopleNames(books.currentBook)}
-            requireMember={bookAaOn(books.currentBook)}
-          />
-        ) : (
-          <BookFields form={form} setForm={setForm} accounts={books.accounts} categories={books.categories} showImages />
-        )}
+        <div className="bill-edit-body">
+          {hint && <p className="tiny muted">{hint}</p>}
+          {isNative && seed?.source && (
+            <button className="secondary" type="button" onClick={() => { void openPayApp(seed.source); }}>
+              {seed.source === 'alipay' ? '去支付宝识别详情' : '去微信识别详情'}
+            </button>
+          )}
+          {error && <div className="error">{error}</div>}
+          {shared ? (
+            <SharedBillFields
+              form={form}
+              setForm={setForm}
+              accounts={books.accounts}
+              categories={books.categories}
+              participants={bookPeopleNames(books.currentBook)}
+              requireMember={bookAaOn(books.currentBook)}
+            />
+          ) : (
+            <BookFields form={form} setForm={setForm} accounts={books.accounts} categories={books.categories} showImages />
+          )}
+        </div>
         <div className="modal-actions">
           <button className="secondary" type="button" onClick={onClose}>取消</button>
           <button className="primary" type="submit" disabled={saving}>{saving ? '保存中…' : '记一笔'}</button>
@@ -443,6 +458,7 @@ const ICONS = {
   users: ['M17 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8', 'M22 21v-2a4 4 0 0 0-3-3.9', 'M16 3.2a4 4 0 0 1 0 7.6'],
   user: ['M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2', 'M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8'],
   grid: ['M4 4h6.5v6.5H4z', 'M13.5 4H20v6.5h-6.5z', 'M4 13.5h6.5V20H4z', 'M13.5 13.5H20V20h-6.5z'],
+  share: ['M14 5h5v5', 'M19 5l-8 8', 'M17 13.5V18a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h4.5'],
 };
 
 function Icon({ name, size = 18 }) {
@@ -473,8 +489,11 @@ function stringToColor(str) {
 function BookSwitch({ books, currentBookId, onChange }) {
   const navigate = useNavigate();
   const { pathname } = useLocation();
+  const { reload } = useBooks();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
+  const [hint, setHint] = useState('');
+  const [sharingId, setSharingId] = useState(0);
   useScrollLock(open);
   useEffect(() => { setOpen(false); }, [pathname]);
   useEffect(() => {
@@ -487,6 +506,71 @@ function BookSwitch({ books, currentBookId, onChange }) {
   const current = mine.find((book) => book.id === currentBookId) || mine[0];
   const filtered = mine.filter((book) => book.name.toLowerCase().includes(q.toLowerCase()));
   if (!mine.length) return null;
+
+  // 没开分享：先开成只读再复制。已经开着：直接复制，不关掉。
+  // 复制必须在这次点击里发起，等接口回来再写剪贴板，手机上会失败。
+  async function shareBook(book, event) {
+    event.stopPropagation();
+    event.preventDefault();
+    const canManage = book.role === 'owner' || book.role === 'admin';
+    if (book.shareEnabled && book.shareToken) {
+      const link = shareUrl(book.shareToken);
+      const ok = await copyText(link);
+      setHint(ok ? '链接已复制' : link);
+      return;
+    }
+    if (!canManage) return;
+    setSharingId(book.id);
+    setHint('');
+    const pending = (async () => {
+      const result = await api(`/api/books/${book.id}/share`, {
+        method: 'POST',
+        body: { enabled: true, writable: false },
+      });
+      await reload();
+      return shareUrl(result.book.shareToken);
+    })();
+    let copied = false;
+    try {
+      if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+        const item = new ClipboardItem({
+          'text/plain': pending.then((link) => new Blob([link], { type: 'text/plain' })),
+        });
+        await navigator.clipboard.write([item]);
+        copied = true;
+      }
+    } catch {
+      copied = false;
+    }
+    try {
+      const link = await pending;
+      if (!copied) copied = await copyText(link);
+      setHint(copied ? '链接已复制' : link);
+    } catch (err) {
+      setHint(err.message);
+    } finally {
+      setSharingId(0);
+    }
+  }
+
+  async function toggleShareMode(book, event) {
+    event.stopPropagation();
+    event.preventDefault();
+    if (book.role !== 'owner' && book.role !== 'admin') return;
+    setSharingId(book.id);
+    setHint('');
+    try {
+      const writable = !book.shareWritable;
+      await api(`/api/books/${book.id}/share`, { method: 'POST', body: { enabled: true, writable } });
+      await reload();
+      setHint(writable ? '分享已改为可编辑' : '分享已改为只读');
+    } catch (err) {
+      setHint(err.message);
+    } finally {
+      setSharingId(0);
+    }
+  }
+
   return (
     <div className="book-picker">
       <button className="book-current" type="button" onClick={() => { setOpen(true); setQ(''); }} title="切换账本">
@@ -513,27 +597,68 @@ function BookSwitch({ books, currentBookId, onChange }) {
               placeholder="搜索账本…"
               autoFocus={window.matchMedia('(min-width: 901px)').matches}
             />
+            {hint && <p className="tiny muted book-switch-hint">{hint}</p>}
             <div className="book-switch-list">
-              {filtered.map((book) => (
-                <button
-                  key={book.id}
-                  type="button"
-                  className={`book-switch-item${book.id === currentBookId ? ' active' : ''}`}
-                  // 换完账本就关掉弹窗，并回到总览：留在原页面的话，看到的是新账本下的旧筛选
-                  onClick={() => { onChange(book.id); setOpen(false); navigate('/'); }}
-                >
-                  <span className="book-avatar" style={{ background: stringToColor(book.name) }}>{book.name.slice(0, 1)}</span>
-                  <span className="book-meta">
-                    <b>{book.name}</b>
-                    <span className="tiny muted">
-                      {book.kindLabel}
-                      {book.role && book.role !== 'owner' ? ` · ${book.ownerName}` : ''}
-                      {book.archived ? ' · 已归档' : ''}
+              {filtered.map((book) => {
+                const canManage = book.role === 'owner' || book.role === 'admin';
+                const canShare = book.kind !== 'personal' && (canManage || book.shareEnabled);
+                const modeLabel = book.shareWritable ? '可编辑' : '只读';
+                return (
+                  <div
+                    key={book.id}
+                    role="button"
+                    tabIndex={0}
+                    className={`book-switch-item${book.id === currentBookId ? ' active' : ''}${book.shareEnabled ? ' has-share' : ''}`}
+                    // 换完账本就关掉弹窗，并回到总览：留在原页面的话，看到的是新账本下的旧筛选
+                    onClick={() => { onChange(book.id); setOpen(false); navigate('/'); }}
+                    onKeyDown={(event) => {
+                      if (event.target !== event.currentTarget) return;
+                      if (event.key !== 'Enter' && event.key !== ' ') return;
+                      event.preventDefault();
+                      onChange(book.id);
+                      setOpen(false);
+                      navigate('/');
+                    }}
+                  >
+                    <span className="book-avatar" style={{ background: stringToColor(book.name) }}>{book.name.slice(0, 1)}</span>
+                    <span className="book-meta">
+                      <b>{book.name}</b>
+                      <span className="tiny muted">
+                        {book.kindLabel}
+                        {book.role && book.role !== 'owner' ? ` · ${book.ownerName}` : ''}
+                        {book.archived ? ' · 已归档' : ''}
+                      </span>
                     </span>
-                  </span>
-                  {book.id === currentBookId ? <span className="book-check">✓</span> : <span className="tiny muted">切换</span>}
-                </button>
-              ))}
+                    {book.shareEnabled && (
+                      canManage ? (
+                        <button
+                          type="button"
+                          className="book-share-mark"
+                          title={book.shareWritable ? '改成只读' : '改成可编辑'}
+                          disabled={sharingId === book.id}
+                          onClick={(event) => toggleShareMode(book, event)}
+                        >
+                          {modeLabel}
+                        </button>
+                      ) : <span className="book-share-mark">{modeLabel}</span>
+                    )}
+                    <span className="book-switch-side">
+                      {canShare && (
+                        <button
+                          type="button"
+                          className={`book-share-btn${book.shareEnabled ? ' on' : ''}`}
+                          title={book.shareEnabled ? '复制分享链接' : '开启只读分享并复制链接'}
+                          disabled={sharingId === book.id}
+                          onClick={(event) => shareBook(book, event)}
+                        >
+                          <Icon name="share" size={16} />
+                        </button>
+                      )}
+                      {book.id === currentBookId ? <span className="book-check">✓</span> : <span className="tiny muted">切换</span>}
+                    </span>
+                  </div>
+                );
+              })}
               {!filtered.length && <p className="muted">没有匹配的账本</p>}
             </div>
             <div className="modal-actions">
@@ -573,9 +698,10 @@ function Shell({ user, onLogout, onSaved, children }) {
   const primary = groups[0].items;
   const moreItems = groups.slice(1).flatMap((group) => group.items);
   const userTabActive = pathname === '/me' || moreItems.some(([to]) => pathname === to);
+  const showFab = pathname === '/' || pathname === '/calendar' || pathname === '/bills';
   return (
     <BooksContext.Provider value={books}>
-      <div className="app-shell">
+      <div className={`app-shell${userTabActive ? ' app-shell-user' : ''}`}>
         <aside className="sidebar">
           <div className="sidebar-head">
             <div className="brand">轻账单<span className="brand-sub">LEDGER</span></div>
@@ -604,10 +730,12 @@ function Shell({ user, onLogout, onSaved, children }) {
             </div>
           </div>
         </aside>
-        <header className="h5-bar">
-          <div className="brand">轻账单</div>
-          <BookSwitch books={bookList} currentBookId={currentBookId} onChange={setCurrentBookId} />
-        </header>
+        {!userTabActive && (
+          <header className="h5-bar">
+            <div className="brand">轻账单</div>
+            <BookSwitch books={bookList} currentBookId={currentBookId} onChange={setCurrentBookId} />
+          </header>
+        )}
         <main className="main">{children}</main>
         <nav className="h5-tabs" aria-label="主导航">
           {primary.map(([to, label, icon]) => (
@@ -621,9 +749,11 @@ function Shell({ user, onLogout, onSaved, children }) {
             <span>用户</span>
           </NavLink>
         </nav>
-        <button className="fab" type="button" title="记一笔" aria-label="记一笔" onClick={() => setCreating(true)}>
-          <span className="fab-plus">+</span>
-        </button>
+        {showFab && (
+          <button className="fab" type="button" title="记一笔" aria-label="记一笔" onClick={() => setCreating(true)}>
+            <span className="fab-plus">+</span>
+          </button>
+        )}
         <CreateBillModal open={creating} seed={payDraft} onClose={() => { setCreating(false); setPayDraft(null); }} onSaved={onSaved} />
       </div>
     </BooksContext.Provider>
@@ -1317,15 +1447,16 @@ function BillDetail({ tx, onClose, onDelete, onSave }) {
   return createPortal(
     <div className="modal-backdrop" onClick={onClose}>
       <div
-        className={`modal ${editing ? 'modal-wide' : 'modal-detail'}`}
+        className={`modal ${editing ? 'modal-wide bill-edit' : 'modal-detail'}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="bill-title"
         onClick={(event) => event.stopPropagation()}
       >
         {editing ? (
-          <form className="stack" onSubmit={save}>
+          <form className="bill-edit-form" onSubmit={save}>
             <h2 id="bill-title">编辑账单</h2>
+            <div className="bill-edit-body">
             {books.books.find((book) => book.id === tx.bookId)?.kind !== 'personal' && tx.bookId ? (
               <SharedBillFields
                 form={form}
@@ -1339,6 +1470,7 @@ function BillDetail({ tx, onClose, onDelete, onSave }) {
               <BookFields form={form} setForm={setForm} accounts={books.accounts} categories={books.categories} showImages />
             )}
             {error && <div className="error">{error}</div>}
+            </div>
             <div className="modal-actions">
               <button className="secondary" type="button" onClick={() => setEditing(false)}>取消</button>
               <button className="primary" type="submit" disabled={saving}>{saving ? '保存中' : '保存'}</button>
@@ -2222,23 +2354,34 @@ function Bills() {
   // 当前筛选条件下的金额合计（后端按全部匹配项统计，不只是已加载的）
   const [summary, setSummary] = useState(null);
   const [filterOpen, setFilterOpen] = useState(false);
+  useScrollLock(filterOpen);
   const bookId = activeBookId || '';
-  function queryString(overrides) {
+  function queryString(overrides = {}) {
+    const pick = (key, current) => (Object.prototype.hasOwnProperty.call(overrides, key) ? overrides[key] : current);
     const params = new URLSearchParams();
-    const sortValue = overrides?.sort ?? sort;
-    const offsetValue = overrides?.offset ?? offset;
+    const sortValue = pick('sort', sort);
+    const offsetValue = pick('offset', offset);
+    const typeValue = pick('type', type);
+    const sourceValue = pick('source', source);
+    const accountValue = pick('accountId', accountId);
+    const categoryValue = pick('categoryId', categoryId);
+    const fromValue = pick('from', from);
+    const toValue = pick('to', to);
+    const minValue = pick('minAmount', minAmount);
+    const maxValue = pick('maxAmount', maxAmount);
+    const qValue = pick('q', q);
     if (sortValue) params.set('sort', sortValue);
-    if (accountId) params.set('accountIds', accountId);
+    if (accountValue) params.set('accountIds', accountValue);
     if (offsetValue) params.set('offset', offsetValue);
     params.set('limit', String(BILL_PAGE_SIZE));
-    if (q.trim()) params.set('q', q.trim());
-    if (from) params.set('from', from);
-    if (to) params.set('to', to);
-    if (type) params.set('type', type);
-    if (source) params.set('source', source);
-    if (categoryId) params.set('categoryIds', categoryId);
-    if (minAmount !== '') params.set('minAmount', minAmount);
-    if (maxAmount !== '') params.set('maxAmount', maxAmount);
+    if (String(qValue || '').trim()) params.set('q', String(qValue).trim());
+    if (fromValue) params.set('from', fromValue);
+    if (toValue) params.set('to', toValue);
+    if (typeValue) params.set('type', typeValue);
+    if (sourceValue) params.set('source', sourceValue);
+    if (categoryValue) params.set('categoryIds', categoryValue);
+    if (minValue !== '') params.set('minAmount', minValue);
+    if (maxValue !== '') params.set('maxAmount', maxValue);
     if (bookId) params.set('bookId', bookId);
     const text = params.toString();
     return text ? `?${text}` : '';
@@ -2349,31 +2492,10 @@ function Bills() {
   // 按金额排序时不再按天分组，平铺展示
   const groups = sort ? (rows.length ? [{ day: '', items: rows }] : []) : groupByDay(rows);
   const sortLabel = BILL_SORTS.find(([value]) => value === sort)?.[1] || '按金额排序';
-  return (
-    <>
-      <div className="page-head">
-        <div>
-          <span className="page-eyebrow">{books.currentBook ? books.currentBook.name : '全部账本'}</span>
-          <h1>账单</h1>
-        </div>
-        <div className="row page-actions">
-          <button className="secondary" type="button" disabled={!!exporting} onClick={() => download('csv')}>{exporting === 'csv' ? '导出中' : '导出 CSV'}</button>
-          <button className="secondary" type="button" disabled={!!exporting} onClick={() => download('xlsx')}>{exporting === 'xlsx' ? '导出中' : '导出 Excel'}</button>
-          <button className="danger" type="button" disabled={!!exporting} onClick={() => setClearing(true)}>清除账单</button>
-        </div>
-      </div>
-      {error && <div className="error">{error}</div>}
-      <form className={`card row search-row${filterOpen ? ' open' : ''}`} onSubmit={(e) => { e.preventDefault(); setFilterOpen(false); load().catch((err) => setError(err.message)); }}>
-        <button
-          className={`h5-only h5-filter-btn${[type, source, accountId, categoryId, from, to, minAmount, maxAmount].some(Boolean) ? ' has' : ''}`}
-          type="button"
-          onClick={() => setFilterOpen((open) => !open)}
-        >
-          {filterOpen ? '收起筛选' : '筛选'}
-          {[type, source, accountId, categoryId, from, to, minAmount, maxAmount].filter(Boolean).length
-            ? ` · ${[type, source, accountId, categoryId, from, to, minAmount, maxAmount].filter(Boolean).length}`
-            : ''}
-        </button>
+  const filterCount = [type, source, accountId, categoryId, from, to, minAmount, maxAmount].filter(Boolean).length;
+  function renderFilterFields() {
+    return (
+      <>
         <label>类型
           <AppSelect value={type} onChange={(e) => setType(e.target.value)}>
             <option value="">全部</option>
@@ -2389,7 +2511,6 @@ function Bills() {
         <label>账户
           <AppSelect value={accountId} onChange={(e) => setAccountId(e.target.value)}>
             <option value="">全部</option>
-            {/* 只列主账户：已合并的旧账户本身没有账单，选它查不到东西 */}
             {books.accounts.filter((a) => !a.archived && !a.mergedInto).map((a) => (
               <option key={a.id} value={a.id}>{a.name}</option>
             ))}
@@ -2411,23 +2532,38 @@ function Bills() {
         <label>结束<input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
         <label>金额
           <span className="amount-range">
-            <input
-              type="number"
-              step="0.01"
-              placeholder="最小"
-              value={minAmount}
-              onChange={(e) => setMinAmount(e.target.value)}
-            />
+            <input type="number" step="0.01" placeholder="最小" value={minAmount} onChange={(e) => setMinAmount(e.target.value)} />
             <span className="muted">–</span>
-            <input
-              type="number"
-              step="0.01"
-              placeholder="最大"
-              value={maxAmount}
-              onChange={(e) => setMaxAmount(e.target.value)}
-            />
+            <input type="number" step="0.01" placeholder="最大" value={maxAmount} onChange={(e) => setMaxAmount(e.target.value)} />
           </span>
         </label>
+      </>
+    );
+  }
+  return (
+    <>
+      <div className="page-head">
+        <div>
+          <span className="page-eyebrow">{books.currentBook ? books.currentBook.name : '全部账本'}</span>
+          <h1>账单</h1>
+        </div>
+        <div className="row page-actions">
+          <button className="secondary" type="button" disabled={!!exporting} onClick={() => download('csv')}>{exporting === 'csv' ? '导出中' : '导出 CSV'}</button>
+          <button className="secondary" type="button" disabled={!!exporting} onClick={() => download('xlsx')}>{exporting === 'xlsx' ? '导出中' : '导出 Excel'}</button>
+          <button className="danger" type="button" disabled={!!exporting} onClick={() => setClearing(true)}>清除账单</button>
+        </div>
+      </div>
+      {error && <div className="error">{error}</div>}
+      <div className="bill-pin">
+      <form className="card row search-row" onSubmit={(e) => { e.preventDefault(); load().catch((err) => setError(err.message)); }}>
+        <button
+          className={`h5-only h5-filter-btn${filterCount ? ' has' : ''}`}
+          type="button"
+          onClick={() => setFilterOpen(true)}
+        >
+          筛选{filterCount ? ` · ${filterCount}` : ''}
+        </button>
+        <div className="bill-filter-inline">{renderFilterFields()}</div>
         <label className="grow">关键词
           <input placeholder="对方、备注、分类、账户、金额（空格分隔多个词）" value={q} onChange={(e) => setQ(e.target.value)} />
         </label>
@@ -2440,13 +2576,39 @@ function Bills() {
               setType(''); setSource(''); setAccountId(''); setCategoryId(''); setFrom(''); setTo('');
               setMinAmount(''); setMaxAmount(''); setQ(''); setSort('');
               setFilterOpen(false);
-              load({ sort: '' }).catch((err) => setError(err.message));
+              load({ type: '', source: '', accountId: '', categoryId: '', from: '', to: '', minAmount: '', maxAmount: '', q: '', sort: '' })
+                .catch((err) => setError(err.message));
             }}
           >
             重置
           </button>
         )}
       </form>
+      {filterOpen && createPortal(
+        <div className="modal-backdrop" onClick={() => setFilterOpen(false)}>
+          <div className="modal stack bill-filter-modal" role="dialog" aria-modal="true" aria-label="筛选" onClick={(event) => event.stopPropagation()}>
+            <h2>筛选</h2>
+            <div className="bill-filter-fields">{renderFilterFields()}</div>
+            <div className="modal-actions">
+              <button
+                className="secondary"
+                type="button"
+                onClick={() => {
+                  setType(''); setSource(''); setAccountId(''); setCategoryId(''); setFrom(''); setTo('');
+                  setMinAmount(''); setMaxAmount('');
+                  setFilterOpen(false);
+                  load({ type: '', source: '', accountId: '', categoryId: '', from: '', to: '', minAmount: '', maxAmount: '' })
+                    .catch((err) => setError(err.message));
+                }}
+              >
+                重置
+              </button>
+              <button className="primary" type="button" onClick={() => { setFilterOpen(false); load().catch((err) => setError(err.message)); }}>查询</button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
       <div className="query-count muted">
         <div className="segment" role="tablist" aria-label="排序方式">
           {BILL_SORTS.map(([value, label]) => (
@@ -2475,6 +2637,7 @@ function Bills() {
           </span>
         )}
         {notice && <span className="bill-summary">{notice}</span>}
+      </div>
       </div>
       {shownIds.length > 0 && (
         <div className="card bill-bulk">
@@ -2706,7 +2869,7 @@ function Recurring() {
           <h1>定期</h1>
         </div>
       </div>
-      <form className="card stack" onSubmit={submit}>
+      <form className="card stack recurring-form" onSubmit={submit}>
         {error && <div className="error">{error}</div>}
         {editing && (
           <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'wrap' }}>
@@ -2723,7 +2886,7 @@ function Recurring() {
           categories={books.categories}
           showTime={false}
         />
-        <div className="form-row">
+        <div className="form-row wrap">
           <label>周期
             <AppSelect value={form.frequency} onChange={(e) => setForm({ ...form, frequency: e.target.value })}>
               {FREQS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
@@ -4198,6 +4361,28 @@ function shareUrl(token) {
   return `${origin}/share/${token}`;
 }
 
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      const input = document.createElement('textarea');
+      input.value = text;
+      input.setAttribute('readonly', '');
+      input.style.position = 'fixed';
+      input.style.left = '-9999px';
+      document.body.appendChild(input);
+      input.select();
+      const ok = document.execCommand('copy');
+      input.remove();
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+}
+
 // 账本编辑弹窗：改名/改类型、管参与人和协作成员、开关分享、归档、删除
 function BookEditModal({ book, onClose, onChanged }) {
   useScrollLock(true);
@@ -4311,9 +4496,11 @@ function BookEditModal({ book, onClose, onChanged }) {
   }
 
   function copyLink() {
-    navigator.clipboard?.writeText(link);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    copyText(link).then((ok) => {
+      setCopied(ok);
+      if (!ok) setError(link);
+      setTimeout(() => setCopied(false), 1500);
+    });
   }
 
   function destroy() {
@@ -4461,15 +4648,33 @@ function BookEditModal({ book, onClose, onChanged }) {
                 className="secondary small"
                 type="button"
                 disabled={busy}
-                onClick={() => act(() => api(`/api/books/${book.id}/share`, { method: 'POST', body: { enabled: !book.shareEnabled } }))}
+                onClick={() => act(() => api(`/api/books/${book.id}/share`, {
+                  method: 'POST',
+                  body: { enabled: !book.shareEnabled, writable: !!book.shareWritable },
+                }))}
               >
-                {book.shareEnabled ? '关闭分享链接' : '开启分享链接'}
+                {book.shareEnabled ? '关闭分享链接' : (book.shareWritable ? '开启可编辑分享' : '开启只读分享')}
               </button>
               {book.shareEnabled && (
                 <button className="ghost small" type="button" onClick={copyLink}>{copied ? '已复制' : '复制链接'}</button>
               )}
+              {book.shareEnabled && (
+                <button
+                  className="ghost small"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => act(() => api(`/api/books/${book.id}/share`, {
+                    method: 'POST',
+                    body: { enabled: true, writable: !book.shareWritable },
+                  }))}
+                >
+                  {book.shareWritable ? '改为只读' : '改为可编辑'}
+                </button>
+              )}
             </div>
-            {book.shareEnabled && <p className="book-link">免登录链接：{link}</p>}
+            {book.shareEnabled && (
+              <p className="book-link">免登录链接（{book.shareWritable ? '可编辑' : '只读'}）：{link}</p>
+            )}
           </div>
         )}
         </div>
@@ -4557,15 +4762,14 @@ function BooksPage() {
     run(
       () => api(`/api/books/${book.id}/share`, { method: 'POST', body: { enabled: !book.shareEnabled } }),
       (result) => (result.book.shareEnabled
-        ? `分享已开启：${shareUrl(result.book.shareToken)}`
+        ? `分享已开启（${result.book.shareWritable ? '可编辑' : '只读'}）：${shareUrl(result.book.shareToken)}`
         : '分享已关闭，旧链接失效'),
     );
   }
 
   function copyLink(book) {
     const link = shareUrl(book.shareToken);
-    navigator.clipboard?.writeText(link);
-    setNotice(`链接已复制：${link}`);
+    copyText(link).then((ok) => setNotice(ok ? `链接已复制：${link}` : link));
   }
 
   function toggleArchive(book) {
@@ -4633,7 +4837,7 @@ function BooksPage() {
               onClick={() => copyLink(book)}
               style={{ whiteSpace: 'nowrap' }}
             >
-              复制链接
+              复制链接 · {book.shareWritable ? '可编辑' : '只读'}
             </button>
           ) : (
             <span className="muted">—</span>
@@ -4735,65 +4939,6 @@ function BooksPage() {
   );
 }
 
-function pieArc(cx, cy, r, start, end) {
-  const large = end - start > Math.PI ? 1 : 0;
-  const x1 = cx + r * Math.cos(start);
-  const y1 = cy + r * Math.sin(start);
-  const x2 = cx + r * Math.cos(end);
-  const y2 = cy + r * Math.sin(end);
-  return `M ${cx} ${cy} L ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${x2.toFixed(2)} ${y2.toFixed(2)} Z`;
-}
-
-function SharePie({ expense, income }) {
-  const e = Number(expense || 0);
-  const i = Number(income || 0);
-  const total = e + i;
-  if (total <= 0) return <p className="muted">还没有收支。</p>;
-  const size = 180;
-  const cx = size / 2;
-  const cy = size / 2;
-  const r = 72;
-  const inner = 46;
-  const slices = [
-    { name: '支出', amount: e, color: '#ff4d6a' },
-    { name: '收入', amount: i, color: '#2ec4b6' },
-  ];
-  let angle = -Math.PI / 2;
-  const arcs = slices.map((slice) => {
-    const sweep = (slice.amount / total) * Math.PI * 2;
-    const start = angle;
-    const end = angle + sweep;
-    angle = end;
-    return { ...slice, sweep, d: pieArc(cx, cy, r, start, end) };
-  });
-  const net = i - e;
-  const chartArcs = arcs.filter((arc) => arc.amount > 0);
-  return (
-    <div className="share-pie">
-      <svg viewBox={`0 0 ${size} ${size}`} role="img" aria-label="总支出收入占比">
-        {chartArcs.map((arc) => (
-          <path key={arc.name} d={arc.d} fill={arc.color}>
-            <title>{`${arc.name} ${money(arc.amount)}`}</title>
-          </path>
-        ))}
-        <circle cx={cx} cy={cy} r={inner} fill="var(--card)" />
-        <text x={cx} y={cy - 2} className="share-pie-total" textAnchor="middle">{money(Math.abs(net))}</text>
-        <text x={cx} y={cy + 16} className="share-pie-label" textAnchor="middle">{net >= 0 ? '结余' : '净支出'}</text>
-      </svg>
-      <ul className="share-pie-legend">
-        {arcs.map((arc) => (
-          <li key={arc.name}>
-            <span className="dot" style={{ background: arc.color }} />
-            <span>{arc.name}</span>
-            <b>{money(arc.amount)}</b>
-            <em>{`${(arc.sweep / (Math.PI * 2) * 100).toFixed(1)}%`}</em>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
 // 请客 / 自己承担的钱不进 AA，单独提示一句，免得以为漏算了
 function aaSelfNote(aa) {
   const list = (aa?.members || []).filter((item) => Number(item.own) > 0);
@@ -4851,6 +4996,23 @@ function ShareAa({ aa }) {
   );
 }
 
+function entryCategory(item) {
+  return item.categoryName || item.categoryLabel || '未分类';
+}
+
+function shareCategoryItems(entries, type) {
+  const sums = new Map();
+  for (const item of entries) {
+    if (item.type !== type) continue;
+    const name = entryCategory(item);
+    sums.set(name, (sums.get(name) || 0) + Number(item.amount || 0));
+  }
+  return [...sums.entries()]
+    .map(([name, amount]) => ({ name, amount }))
+    .filter((item) => item.amount > 0)
+    .sort((a, b) => b.amount - a.amount);
+}
+
 function SharePage() {
   const rawToken = useParams().token || '';
   // 去除末尾标点/空格等常见复制污染，保留 base64url 字符
@@ -4859,6 +5021,17 @@ function SharePage() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [saving, setSaving] = useState(false);
+  const [catPick, setCatPick] = useState(null);
+  const [filterKind, setFilterKind] = useState('expense');
+  const [narrow, setNarrow] = useState(() => window.matchMedia('(max-width: 900px)').matches);
+  const listRef = useRef(null);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 900px)');
+    const apply = () => setNarrow(mq.matches);
+    apply();
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  }, []);
   const [form, setForm] = useState(() => ({
     memberName: '',
     type: 'expense',
@@ -4919,11 +5092,32 @@ function SharePage() {
     );
   }
 
-  const total = (data?.entries || []).reduce((sum, item) => (
+  const entries = data?.entries || [];
+  const expenseCats = shareCategoryItems(entries, 'expense');
+  const incomeCats = shareCategoryItems(entries, 'income');
+  const activeKind = catPick?.kind || filterKind;
+  // 手机上支出/收入切换本身就是筛选；电脑上仍看全部，点饼图再收窄
+  const pool = narrow ? entries.filter((item) => item.type === activeKind) : entries;
+  const shown = catPick
+    ? pool.filter((item) => item.type === catPick.kind && entryCategory(item) === catPick.name)
+    : pool;
+  const total = shown.reduce((sum, item) => (
     item.type === 'income' ? sum + Number(item.amount) : sum - Number(item.amount)
   ), 0);
+  const pinAmount = shown.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  function pickShareCategory(kind, item) {
+    const next = catPick?.kind === kind && catPick?.name === item.name ? null : { kind, name: item.name };
+    setCatPick(next);
+    if (next && window.matchMedia('(min-width: 901px)').matches) {
+      listRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }
+  function pickFilterKind(kind) {
+    setFilterKind(kind);
+    if (catPick && catPick.kind !== kind) setCatPick(null);
+  }
+  const filterCats = activeKind === 'income' ? incomeCats : expenseCats;
 
-  const netAll = Number(data?.summary?.net || 0);
   // 分摊人：账本预设名单 + 自己，默认全选；没坐车/请假的取消勾选
   const shareOptions = [...new Set([
     ...(data?.book?.participants || []),
@@ -4939,13 +5133,65 @@ function SharePage() {
   return (
     <div className="auth">
       <div className="share-page">
-        <header className="share-header">
-          <h1>{data ? data.book.name : '共享账本'}</h1>
-          <p className="muted">{data ? `${data.book.kindLabel} · 补账不用登录，填个名字就行` : '正在打开…'}</p>
-          {error && <div className="error">{error}</div>}
-          {notice && <p className="muted">{notice}</p>}
-        </header>
+        <div className="share-pin">
+          <header className="share-header">
+            <h1>{data ? data.book.name : '共享账本'}</h1>
+            <p className="muted">
+              {data
+                ? `${data.book.kindLabel} · ${data.book.writable ? '可编辑，填个名字就能补账' : '只读，只能查看'}`
+                : '正在打开…'}
+            </p>
+            {error && <div className="error">{error}</div>}
+            {notice && <p className="muted">{notice}</p>}
+          </header>
+          <div className="share-filter">
+            <div className="segment kind-switch" role="tablist" aria-label="收支">
+              {[['expense', '支出'], ['income', '收入']].map(([kind, label]) => (
+                <button
+                  key={kind}
+                  type="button"
+                  role="tab"
+                  data-kind={kind}
+                  aria-selected={activeKind === kind}
+                  className={activeKind === kind ? 'active' : ''}
+                  onClick={() => pickFilterKind(kind)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="share-filter-row">
+              <button
+                type="button"
+                className={`share-cat-chip${catPick?.kind === activeKind ? '' : ' on'}`}
+                onClick={() => setCatPick(null)}
+              >
+                <span>全部</span>
+                <b>{filterCats.length} 类</b>
+              </button>
+              {filterCats.map((item) => (
+                <button
+                  key={item.name}
+                  type="button"
+                  className={`share-cat-chip${catPick?.kind === activeKind && catPick.name === item.name ? ' on' : ''}`}
+                  onClick={() => pickShareCategory(activeKind, item)}
+                >
+                  <span>{item.name}</span>
+                  <b>¥{money(item.amount)}</b>
+                </button>
+              ))}
+              {filterCats.length === 0 && (
+                <span className="tiny muted share-filter-empty">还没有{activeKind === 'income' ? '收入' : '支出'}</span>
+              )}
+            </div>
+          </div>
+          <div className="tree-head share-pin-count">
+            <h2>已记 {shown.length} 笔</h2>
+            <b>{pinAmount.toFixed(2)} 元</b>
+          </div>
+        </div>
 
+        {data?.book?.writable && (
         <form className="card stack share-form" onSubmit={submit}>
           <div className="form-row wrap">
             <label>你的名字
@@ -5000,36 +5246,18 @@ function SharePage() {
           </div>
           <button className="primary" type="submit" disabled={saving}>{saving ? '保存中…' : '补一笔'}</button>
         </form>
+        )}
 
-        <aside className="share-side">
-          {data?.summary && (
-            <section className="card share-summary-card">
-              <div className="card-head">
-                <h2>总支出 / 收入</h2>
-                <span className="tiny muted">{data.entries.length} 笔</span>
-              </div>
-              <SharePie expense={data.summary.expense} income={data.summary.income} />
-              <div className="share-summary-nums">
-                <div><span className="muted">总支出</span><b className="expense">{money(data.summary.expense)}</b></div>
-                <div><span className="muted">总收入</span><b className="income">{money(data.summary.income)}</b></div>
-                <div><span className="muted">结余</span><b className={netAll >= 0 ? 'income' : 'expense'}>{money(data.summary.net)}</b></div>
-              </div>
-            </section>
-          )}
-          {data?.book?.aaEnabled && data?.aa?.memberCount >= 2 && (
-            <section className="card share-aa-card">
-              <ShareAa aa={data.aa} />
-            </section>
-          )}
-        </aside>
-
-        <section className="card share-list">
-          <div className="tree-head">
-            <h2>已记 {data?.entries.length || 0} 笔</h2>
+        <section className="card share-list" ref={listRef}>
+          <div className="tree-head share-list-head">
+            <h2>{catPick ? `${catPick.kind === 'income' ? '收入' : '支出'} · ${catPick.name}` : `已记 ${entries.length} 笔`}</h2>
             <b>{total.toFixed(2)} 元</b>
+            {catPick && (
+              <button className="ghost tiny" type="button" onClick={() => setCatPick(null)}>看全部</button>
+            )}
           </div>
           <div className="list">
-            {(data?.entries || []).map((item) => {
+            {shown.map((item) => {
               // 标题跟账单列表一致：付款人 · 标题（标题 > 备注 > 分类兜底）
               const title = billTitle(item);
               const sub = [formatWhen(item.occurredAt), item.categoryName || item.categoryLabel, item.note]
@@ -5051,9 +5279,42 @@ function SharePage() {
                 </div>
               );
             })}
-            {(data?.entries || []).length === 0 && <p className="muted">还没有人补账。</p>}
+            {entries.length === 0 && <p className="muted">还没有人补账。</p>}
+            {entries.length > 0 && shown.length === 0 && (
+              <p className="muted">{catPick ? '这个分类下没有账单。' : `还没有${activeKind === 'income' ? '收入' : '支出'}。`}</p>
+            )}
           </div>
         </section>
+
+        <aside className="share-side">
+          {data && (
+            <>
+              {data.book?.aaEnabled && data.aa?.memberCount >= 2 && (
+                <section className="card share-aa-card">
+                  <ShareAa aa={data.aa} />
+                </section>
+              )}
+              <section className="card share-cat-card">
+                <div className="card-head"><h2>支出分类</h2></div>
+                <CategoryPie
+                  items={expenseCats}
+                  activeName={catPick?.kind === 'expense' ? catPick.name : ''}
+                  onPick={(item) => pickShareCategory('expense', item)}
+                  kind="expense"
+                />
+              </section>
+              <section className="card share-cat-card">
+                <div className="card-head"><h2>收入分类</h2></div>
+                <CategoryPie
+                  items={incomeCats}
+                  activeName={catPick?.kind === 'income' ? catPick.name : ''}
+                  onPick={(item) => pickShareCategory('income', item)}
+                  kind="income"
+                />
+              </section>
+            </>
+          )}
+        </aside>
       </div>
     </div>
   );

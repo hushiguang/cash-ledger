@@ -53,6 +53,8 @@ export interface Book {
   archived?: boolean;
   shareEnabled?: boolean;
   shareToken?: string | null;
+  /** 分享链接打开后能否补账。false 为只读 */
+  shareWritable?: boolean;
   aaEnabled?: boolean;
   ownerName?: string;
   members?: BookMember[];

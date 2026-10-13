@@ -312,6 +312,12 @@ if (!bookColumns.some((c) => c.name === 'aa_enabled')) {
   `).run();
 }
 
+// 分享链接默认只读。已经开着的老链接保持可补账，避免突然变成只能看。
+if (!bookColumns.some((c) => c.name === 'share_writable')) {
+  db.exec('ALTER TABLE books ADD COLUMN share_writable INTEGER NOT NULL DEFAULT 0');
+  db.prepare('UPDATE books SET share_writable = 1 WHERE share_enabled = 1').run();
+}
+
 export function dataDirPath() {
   return dataDir;
 }

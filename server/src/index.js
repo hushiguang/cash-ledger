@@ -704,18 +704,26 @@ app.delete('/api/books/:id/participants/:participantId', authRequired, wrap((req
   res.json({ book: bookPayload(req.user, bookById(row.id)) });
 }));
 
-// 分享链接：开就生成 token，关就作废
+// 分享链接：开就生成 token，关就作废。writable 为真才能在分享页补账，否则只读
 app.post('/api/books/:id/share', authRequired, wrap((req, res) => {
   const row = bookById(req.params.id);
   if (!row || !canManageBook(req.user, row)) return fail(res, 404, '账本不存在');
   if (row.kind === 'personal') return fail(res, 400, '个人账本不能分享');
   const enabled = req.body.enabled === false || req.body.enabled === 'false' ? 0 : 1;
   const token = enabled ? (row.share_token || newShareToken()) : row.share_token;
-  db.prepare('UPDATE books SET share_enabled = ?, share_token = ? WHERE id = ?').run(enabled, token, row.id);
+  let writable = row.share_writable ? 1 : 0;
+  if (req.body.writable === false || req.body.writable === 'false' || req.body.writable === 0) writable = 0;
+  else if (req.body.writable === true || req.body.writable === 'true' || req.body.writable === 1) writable = 1;
+  db.prepare('UPDATE books SET share_enabled = ?, share_token = ?, share_writable = ? WHERE id = ?')
+    .run(enabled, token, writable, row.id);
   res.json({ book: bookPayload(req.user, bookById(row.id)) });
 }));
 
-// 免登录补账：拿到分享链接就能看账本、加一笔
+function shareIsWritable(book) {
+  return !!book?.share_writable;
+}
+
+// 免登录查看。只读链接只能看；可编辑链接才能补账
 app.get('/api/share/:token', (req, res) => {
   const book = bookByShareToken(req.params.token);
   if (!book) return fail(res, 404, '链接已失效');
@@ -745,6 +753,7 @@ app.get('/api/share/:token', (req, res) => {
       kind: book.kind,
       kindLabel: bookKindLabel(book.kind),
       aaEnabled: !!book.aa_enabled,
+      writable: shareIsWritable(book),
       // 参与人带过去，补账时不用自己打名字，免得同一个人打成两个名字、AA 算错
       participants: book.aa_enabled ? allParticipants : [],
     },
@@ -761,6 +770,7 @@ app.get('/api/share/:token', (req, res) => {
 app.post('/api/share/:token/entries', wrap((req, res) => {
   const book = bookByShareToken(req.params.token);
   if (!book) return fail(res, 404, '链接已失效');
+  if (!shareIsWritable(book)) return fail(res, 403, '这个分享是只读的，不能补账');
   const memberName = String(req.body.memberName || '').trim();
   if (!memberName) return fail(res, 400, '请填写你的名字');
   const info = insertTransaction({ id: book.owner_id, isAdmin: false }, {
@@ -784,7 +794,9 @@ app.post('/api/upload/image', authRequired, upload.single('image'), wrap(async (
 }));
 
 app.post('/api/share/:token/upload', upload.single('image'), wrap(async (req, res) => {
-  if (!bookByShareToken(req.params.token)) return fail(res, 404, '链接已失效');
+  const book = bookByShareToken(req.params.token);
+  if (!book) return fail(res, 404, '链接已失效');
+  if (!shareIsWritable(book)) return fail(res, 403, '这个分享是只读的，不能上传图片');
   const result = await uploadImage({
     buffer: req.file?.buffer,
     mimetype: req.file?.mimetype,

@@ -215,6 +215,7 @@ a { color: inherit; text-decoration: none; }
 .book-switch-modal input:focus { outline: none; border-color: var(--coral); background: var(--paper); }
 .book-switch-list { display: flex; flex-direction: column; gap: 8px; overflow: auto; max-height: 54vh; }
 .book-switch-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -223,7 +224,41 @@ a { color: inherit; text-decoration: none; }
   border-radius: 12px;
   background: var(--paper);
   text-align: left;
+  cursor: pointer;
 }
+.book-switch-item.has-share { padding-top: 20px; }
+.book-switch-hint { margin: -4px 0 0; }
+.book-share-mark {
+  position: absolute;
+  top: 5px;
+  right: 10px;
+  z-index: 1;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--coral);
+  font-size: 10px;
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+button.book-share-mark { cursor: pointer; }
+.book-switch-side { display: flex; align-items: center; gap: 2px; flex: none; }
+.book-share-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  opacity: 0.4;
+}
+.book-share-btn.on { color: var(--coral); opacity: 1; }
+.book-share-btn:hover { background: var(--hover); }
 .book-switch-item:hover { background: var(--hover); border-color: var(--coral); }
 /* 当前账本：整条高亮 + 打勾 */
 .book-switch-item.active { background: var(--wash-coral); border-color: var(--coral); }
@@ -231,6 +266,7 @@ a { color: inherit; text-decoration: none; }
 .book-check { color: var(--coral); font-size: 14px; font-weight: 700; flex: none; }
 /* 底部留够空间，别让右下角的浮动「记一笔」压住最后一条内容 */
 .main { padding: 22px 26px 96px; width: min(1120px, 100%); margin: 0 auto; }
+.main:has(.share-page) { width: min(1240px, 100%); }
 .page-eyebrow { font-size: 12px; letter-spacing: 0.1em; color: var(--muted); display: block; margin-bottom: 2px; }
 /* 结余主卡：左边大数字，右边支出/收入 */
 .hero {
@@ -266,6 +302,9 @@ a { color: inherit; text-decoration: none; }
     align-content: start;
     overflow: hidden;
   }
+  .h5-bar { grid-row: 1; }
+  .main { grid-row: 2; }
+  .h5-tabs, .fab { grid-row: 2; }
   /* 窄屏改走底部标签，桌面侧栏整段收起 */
   .sidebar { display: none; }
   .book-switch-modal { width: 100%; }
@@ -385,6 +424,8 @@ h2 { font-size: 18px; }
 .segment button.active { background: var(--chip); color: var(--coral-dark); box-shadow: 0 1px 4px rgba(36, 28, 51, 0.08); }
 /* 支出/收入切换：选中态直接用收支本身的配色，一眼能看出在看哪一边 */
 .segment.kind-switch { margin: 2px 0 12px; align-self: flex-start; padding: 4px; gap: 4px; }
+.trend-card .kind-switch { width: 100%; align-self: stretch; }
+.trend-card .kind-switch button { flex: 1; text-align: center; }
 .segment.kind-switch button {
   padding: 8px 22px;
   font-size: 14px;
@@ -741,6 +782,11 @@ input, select, textarea, .app-select-btn {
   background: var(--paper);
   box-shadow: var(--shadow);
 }
+.app-select-group {
+  padding: 8px 12px 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
 .app-select-option {
   width: 100%;
   min-height: 44px;
@@ -810,6 +856,26 @@ tbody tr:last-child td { border-bottom: 0; }
   border-radius: 999px;
   padding: 1px 8px;
 }
+.bill-filter-inline { display: contents; }
+.bill-filter-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
+.bill-filter-fields > label:last-child { grid-column: 1 / -1; }
+.bill-filter-fields label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.bill-filter-fields .amount-range { display: flex; align-items: center; gap: 8px; }
+.bill-filter-fields .amount-range input { flex: 1; width: auto; min-width: 0; }
+.modal.bill-filter-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(480px, 100%);
+  max-height: min(68dvh, calc(100dvh - var(--safe-top) - 72px));
+  overflow: hidden;
+  padding-top: 14px;
+  padding-bottom: calc(12px + var(--safe-bottom));
+}
+.modal.bill-filter-modal h2 { margin: 0 0 8px; font-size: 18px; }
+.modal.bill-filter-modal .bill-filter-fields { min-height: 0; overflow: auto; }
+.modal.bill-filter-modal .modal-actions { flex: none; margin-top: 10px; }
+.modal.bill-filter-modal input:not([type="checkbox"]):not([type="radio"]),
+.modal.bill-filter-modal .app-select-btn { min-height: 36px; height: 36px; font-size: 16px; }
 .search-row { flex-wrap: wrap; align-items: flex-end; }
 .search-row label { min-width: 140px; }
 .search-row label.grow { flex: 1; min-width: 220px; }
@@ -818,6 +884,16 @@ tbody tr:last-child td { border-bottom: 0; }
 .search-row .amount-range { display: inline-flex; align-items: center; gap: 6px; }
 .search-row .amount-range input { width: 92px; }
 .query-count { margin: 10px 4px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.bill-pin {
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  isolation: isolate;
+  background: var(--bg);
+  transform: translateZ(0);
+  padding-bottom: 14px;
+}
+.bill-pin ~ .ledger { position: relative; z-index: 0; }
 /* 筛选后的金额合计 */
 .bill-summary { display: inline-flex; align-items: baseline; gap: 6px; }
 /* 批量改分类：勾选后工具条常驻在列表上方 */
@@ -1066,6 +1142,28 @@ h2 .tx-flag { margin-left: 8px; vertical-align: 2px; }
   box-shadow: 0 24px 60px rgba(28, 20, 40, 0.22);
 }
 .modal.modal-wide { width: min(860px, 100%); }
+.modal.modal-wide.bill-edit {
+  display: flex;
+  flex-direction: column;
+  width: min(720px, 100%);
+  max-height: min(68dvh, 620px);
+  overflow: hidden;
+  padding: 16px 18px 14px;
+}
+.bill-edit-form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  gap: 8px;
+}
+.bill-edit-body { min-height: 0; overflow: auto; }
+.modal.bill-edit .form-row.wrap,
+.recurring-form .form-row.wrap { gap: 8px 10px; }
+.modal.bill-edit .form-row.wrap > label.field-full > textarea,
+.recurring-form .form-row.wrap > label.field-full > textarea { min-height: 64px; }
+.recurring-form { gap: 8px; padding: 14px 16px; }
+.modal.bill-edit .modal-actions { flex: none; margin-top: 4px; }
+.modal.bill-edit h2 { margin: 0; }
 .modal.modal-book {
   overflow: hidden;
   padding-bottom: calc(12px + var(--safe-bottom));
@@ -1128,49 +1226,183 @@ h2 .tx-flag { margin-left: 8px; vertical-align: 2px; }
 .book-card.active { border-color: var(--violet); box-shadow: inset 0 0 0 1px var(--violet); }
 .book-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .book-card-head .spacer { flex: 1; }
+.auth:has(.share-page) {
+  display: block;
+  padding: 28px 32px 48px;
+}
+.app-shell .auth:has(.share-page) { padding: 0; }
 .share-page {
-  width: min(1100px, 100%);
+  width: min(1240px, 100%);
+  margin: 0 auto;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 340px;
-  grid-template-rows: auto 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(520px, 640px);
   grid-template-areas:
     "header header"
-    "form side"
+    "form form"
     "list side";
-  gap: 16px;
+  gap: 16px 20px;
   align-items: start;
 }
+.share-pin { display: contents; }
+.share-filter,
+.share-pin-count { display: none; }
 .share-header { grid-area: header; }
 .share-header h1 { margin-bottom: 4px; }
-.share-form { grid-area: form; }
-.share-side { grid-area: side; display: grid; gap: 12px; position: sticky; top: 16px; align-self: start; }
-.share-list { grid-area: list; }
-.share-summary-card { padding-bottom: 12px; }
-.share-summary-nums { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; text-align: center; font-size: 12px; margin-top: 10px; }
-.share-summary-nums span { display: block; color: var(--muted); margin-bottom: 2px; }
-.share-summary-nums b { font-size: 15px; }
-.share-pie { display: grid; place-items: center; padding: 8px 0 4px; }
-.share-pie svg { width: 170px; height: 170px; }
-.share-pie-total { font-size: 18px; font-weight: 700; fill: var(--ink); }
-.share-pie-label { font-size: 11px; fill: var(--muted); }
-.share-pie-legend { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; font-size: 13px; }
-.share-pie-legend li { display: flex; align-items: center; gap: 8px; }
-.share-pie-legend .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.share-pie-legend b { margin-left: auto; font-variant-numeric: tabular-nums; }
-.share-pie-legend em { color: var(--muted); font-style: normal; font-size: 12px; width: 44px; text-align: right; }
+.share-page:not(:has(.share-form)) {
+  grid-template-areas:
+    "header header"
+    "list side";
+}
+.share-form { grid-area: form; min-width: 0; }
+.share-list { grid-area: list; min-width: 0; }
+.share-aa-card { grid-column: 1 / -1; min-width: 0; }
+.share-side {
+  grid-area: side;
+  position: sticky;
+  top: 16px;
+  align-self: start;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  min-width: 0;
+}
+.share-cat-card { padding: 14px 14px 8px; min-width: 0; }
+.share-cat-card .pie-legend button { min-width: 0; }
+.share-cat-card .pie-legend span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.share-cat-card .pie-wrap { flex-direction: column; align-items: center; gap: 4px; }
+.share-cat-card .pie-chart { width: 156px; height: 156px; }
+.share-cat-card .pie-legend { width: 100%; min-width: 0; grid-template-columns: 1fr; gap: 0; }
 .share-aa-card .card-head { margin-bottom: 10px; }
 .share-aa-card .aa-table { width: 100%; font-size: 13px; }
 @media (max-width: 900px) {
+  .auth:has(.share-page) {
+    padding: 0 0 calc(24px + var(--safe-bottom)) 0;
+  }
+  .app-shell .main:has(.share-page) {
+    padding-top: 0;
+    padding-left: 0;
+    padding-right: 0;
+  }
   .share-page {
+    width: 100%;
     grid-template-columns: 1fr;
     grid-template-areas:
       "header"
-      "form"
+      "side"
+      "list"
+      "form";
+    gap: 12px;
+  }
+  .share-page:not(:has(.share-aa-card)) {
+    grid-template-areas:
+      "header"
+      "list"
+      "form";
+  }
+  .share-page:not(:has(.share-form)) {
+    grid-template-areas:
+      "header"
       "side"
       "list";
   }
-  .share-side { position: static; }
-  .share-summary-nums b { font-size: 14px; }
+  .share-page:not(:has(.share-form)):not(:has(.share-aa-card)) {
+    grid-template-areas:
+      "header"
+      "list";
+  }
+  .share-page > :not(.share-pin) {
+    margin-left: calc(14px + var(--safe-left));
+    margin-right: calc(14px + var(--safe-right));
+  }
+  .share-pin {
+    display: block;
+    grid-area: header;
+    position: sticky;
+    top: 0;
+    z-index: 6;
+    min-width: 0;
+    max-width: 100%;
+    background: var(--bg);
+    border-bottom: 1px solid var(--line);
+    padding: calc(12px + var(--safe-top)) calc(14px + var(--safe-right)) 8px calc(14px + var(--safe-left));
+  }
+  .app-shell .share-pin { padding-top: 10px; }
+  .share-header h1 { font-size: 22px; }
+  .share-header p { margin: 2px 0 0; }
+  .share-filter { display: block; margin-top: 10px; min-width: 0; max-width: 100%; }
+  .share-filter .kind-switch { width: 100%; margin: 0 0 8px; }
+  .share-filter .kind-switch button { flex: 1; }
+  .share-filter-row {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 8px;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+  .share-filter-row::-webkit-scrollbar { display: none; }
+  .share-cat-chip {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    max-width: 148px;
+    padding: 7px 10px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--paper);
+    color: var(--ink);
+    text-align: left;
+  }
+  .share-cat-chip span {
+    max-width: 128px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+  }
+  .share-cat-chip b {
+    font-size: 12px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--muted);
+  }
+  .share-cat-chip.on {
+    border-color: transparent;
+    background: var(--wash-coral);
+    color: var(--coral);
+  }
+  .share-cat-chip.on b { color: var(--coral); }
+  .share-filter-empty { align-self: center; flex: none; }
+  .share-pin-count {
+    display: flex;
+    margin: 10px 0 0;
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
+  }
+  .share-pin-count h2 { font-size: 16px; }
+  .share-pin-count b { font-variant-numeric: tabular-nums; }
+  .share-list-head { display: none; }
+  .share-cat-card { display: none; }
+  .share-side:not(:has(.share-aa-card)) { display: none; }
+  .share-side {
+    position: static;
+    max-height: none;
+    overflow: visible;
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+  .share-aa-card .aa-table { font-size: 12px; }
 }
 
 /* 图片：上传按钮 + 缩略图格子 */
@@ -1661,8 +1893,9 @@ html, body { overscroll-behavior-y: none; }
     max-height: var(--cal-row, 48px);
   }
 
-  /* 账单筛选默认只留搜索；点开后再铺两列，不要八个输入框占满首屏 */
+  /* 手机上筛选收到弹窗里，搜索行只留关键词、查询、筛选 */
   .h5-only { display: inline-flex; }
+  .bill-filter-inline { display: none; }
   .search-row { align-items: stretch; gap: 8px; padding: 10px 12px; }
   .search-row:not(.open) > label:not(.grow) { display: none; }
   .search-row:not(.open) > label.grow { font-size: 0; gap: 0; }
@@ -1723,6 +1956,23 @@ html, body { overscroll-behavior-y: none; }
   .search-row.open > .primary { width: 100%; }
   .search-row label { font-size: 12px; }
   .query-count { margin-top: 8px; font-size: 12px; }
+  .main:has(.bill-pin) { padding-top: 0; }
+  .main:has(.bill-pin) > .page-head { padding-top: 10px; }
+  .bill-pin {
+    top: 0;
+    margin: 0 -14px;
+    padding: 8px 14px 16px;
+    border-bottom: 0;
+    background: var(--bg);
+  }
+  .bill-pin .query-count {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    margin: 8px 2px 0;
+    background: var(--bg);
+  }
+  .bill-pin .bill-summary { white-space: nowrap; }
 
   .h5-tabs {
     display: flex;
@@ -1865,60 +2115,11 @@ html, body { overscroll-behavior-y: none; }
   html[data-keyboard='1'] .fab { display: none; }
   html[data-keyboard='1'] .main { padding-bottom: calc(16px + var(--safe-bottom)); }
 
-  /* 免登录补账页很长，不要被登录页的垂直居中裁掉顶部 */
+  /* 免登录分享页自己处理顶部安全区，标题才能贴着屏幕钉住 */
   .auth:has(.share-page) {
     display: block;
-    padding: calc(16px + var(--safe-top)) calc(12px + var(--safe-right)) calc(24px + var(--safe-bottom)) calc(12px + var(--safe-left));
+    padding: 0 0 calc(24px + var(--safe-bottom)) 0;
   }
-  .share-page { width: 100%; }
-  /* 总支出/收入收到表单上面，滑的时候钉成一行；饼图留在桌面侧栏 */
-  .auth:has(.share-summary-card) {
-    padding-top: calc(40px + var(--safe-top));
-  }
-  .share-summary-card {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    z-index: 20;
-    margin: 0;
-    border: 0;
-    border-radius: 0;
-    border-bottom: 1px solid var(--line);
-    box-shadow: none;
-    background: var(--bg);
-    padding: calc(8px + var(--safe-top)) calc(12px + var(--safe-right)) 8px calc(12px + var(--safe-left));
-  }
-  .share-summary-card .card-head,
-  .share-summary-card .share-pie,
-  .share-summary-card > p { display: none; }
-  .share-summary-card .share-summary-nums {
-    display: flex;
-    gap: 8px;
-    margin: 0;
-    text-align: left;
-  }
-  .share-summary-card .share-summary-nums > div {
-    flex: 1 1 0;
-    min-width: 0;
-    display: flex;
-    align-items: baseline;
-    justify-content: center;
-    gap: 4px;
-  }
-  .share-summary-card .share-summary-nums span {
-    display: inline;
-    margin: 0;
-    font-size: 12px;
-    white-space: nowrap;
-  }
-  .share-summary-card .share-summary-nums b {
-    font-size: 15px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
   /* 手机上收成一屏能看完的记账页，不要再把桌面卡片一层层堆乱 */
   .h5-tabs a.active,
   .h5-tabs button.active { background: var(--wash-coral); }
@@ -2024,6 +2225,14 @@ html, body { overscroll-behavior-y: none; }
     max-height: min(86dvh, calc(100dvh - var(--safe-top) - 8px));
     padding: 16px 16px calc(16px + var(--safe-bottom));
   }
+  .modal.modal-wide.bill-edit {
+    max-height: min(64dvh, calc(100dvh - var(--safe-top) - 120px));
+    padding: 12px 14px calc(10px + var(--safe-bottom));
+  }
+  .modal.bill-edit input:not([type="checkbox"]):not([type="radio"]):not(.app-select-required),
+  .modal.bill-edit .app-select-btn,
+  .recurring-form input:not([type="checkbox"]):not([type="radio"]):not(.app-select-required),
+  .recurring-form .app-select-btn { min-height: 38px; height: 38px; }
   .modal.modal-detail .modal-actions { flex-wrap: nowrap; }
   .modal.modal-detail .modal-actions > * { flex: 1 1 0; min-width: 0; }
   .modal.modal-book { padding-bottom: calc(12px + var(--safe-bottom)); }

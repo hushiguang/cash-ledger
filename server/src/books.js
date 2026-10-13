@@ -19,6 +19,8 @@ export function presentBook(row, { role = null, ownerName = '', members = [], pa
     archived: !!row.archived,
     shareEnabled: !!row.share_enabled,
     shareToken: row.share_token || '',
+    // 分享出去之后，对方能不能补账。没开就是只读
+    shareWritable: !!row.share_writable,
     // 开启 AA 才展示参与人、算平摊；关了就只是大家一起记账
     aaEnabled: !!row.aa_enabled,
     members,
