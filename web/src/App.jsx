@@ -1214,7 +1214,7 @@ function ClearBills({ onClose, onCleared, currentBook, bookId, bookQuery }) {
     }
   }
   const ready = text.trim() === '确认' && count > 0 && !busy;
-  return (
+  return createPortal(
     <div className="modal-backdrop" onClick={() => { if (!busy) onClose(); }}>
       <form className="modal stack" role="dialog" aria-modal="true" aria-labelledby="clear-title" onClick={(event) => event.stopPropagation()} onSubmit={submit}>
         <h2 id="clear-title">清除账单</h2>
@@ -1231,7 +1231,8 @@ function ClearBills({ onClose, onCleared, currentBook, bookId, bookQuery }) {
           <button className="danger" type="submit" disabled={!ready}>{busy ? '处理中' : '清除'}</button>
         </div>
       </form>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -2844,7 +2845,7 @@ function SkippedRows({ file, onClose }) {
       unlock();
     };
   }, [onClose]);
-  return (
+  return createPortal(
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal modal-wide stack" role="dialog" aria-modal="true" aria-labelledby="skip-title" onClick={(event) => event.stopPropagation()}>
         <h2 id="skip-title">跳过 {skipped.length} 笔</h2>
@@ -2873,7 +2874,8 @@ function SkippedRows({ file, onClose }) {
           <button className="primary" type="button" onClick={onClose}>关闭</button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -3390,7 +3392,7 @@ function AccountsPage() {
         </section>
 
       </div>
-      {mergeModal && (
+      {mergeModal && createPortal(
         <div className="modal-backdrop" onClick={() => setMergeModal(null)}>
           <div className="modal stack" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
             <h2>{primary.find((a) => a.id === mergeModal)?.name} 的合并账户</h2>
@@ -3413,7 +3415,8 @@ function AccountsPage() {
               <button className="primary" type="button" onClick={() => setMergeModal(null)}>关闭</button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );
@@ -3816,7 +3819,7 @@ const DUP_LEVELS = [
 
 function ConfirmModal({ title, body, confirmLabel = '确定', danger = true, busy = false, onClose, onConfirm }) {
   useScrollLock(true);
-  return (
+  return createPortal(
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal stack" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
         <h2>{title}</h2>
@@ -3828,7 +3831,8 @@ function ConfirmModal({ title, body, confirmLabel = '确定', danger = true, bus
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

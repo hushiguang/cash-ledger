@@ -1985,12 +1985,13 @@ html, body { overscroll-behavior-y: none; }
   .tx-row { grid-template-columns: 32px minmax(0, 1fr) auto; gap: 8px; padding: 12px 2px; }
   .tx-title { white-space: nowrap; }
   .tx-line { align-items: flex-start; }
+  .tx-line .tx-pick { align-self: center; }
   .tx-line .tx-row {
     position: relative;
     grid-template-columns: 32px minmax(0, 1fr);
     padding: 10px 0;
   }
-  .tx-line .tx-side { position: absolute; top: 12px; right: 0; }
+  .tx-line .tx-side { position: absolute; top: 50%; right: 0; transform: translateY(-50%); }
   .tx-line .tx-title {
     display: block;
     padding-right: 96px;
@@ -2000,11 +2001,19 @@ html, body { overscroll-behavior-y: none; }
   }
   .tx-line .tx-main .tiny {
     display: block;
+    padding-right: 96px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .tx-line .tx-del { margin-top: 14px; padding: 2px 0 2px 4px; }
+  .tx-line .tx-del {
+    align-self: center;
+    margin-top: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 0 0 4px;
+  }
   .modal-backdrop { padding: 0; place-items: end center; }
   .modal,
   .modal.modal-wide,
