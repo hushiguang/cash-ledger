@@ -1282,6 +1282,7 @@ function BillDetail({ tx, onClose, onDelete, onSave }) {
       memberName: tx.memberName || '',
       payee: tx.payee || '',
       note: tx.note || '',
+      images: imageList(tx.images),
       // 老账单是 null（全员平分），交给表单默认全选；空数组 = 自己承担
       shareWith: Array.isArray(tx.shareWith) ? tx.shareWith : undefined,
     });
@@ -1300,6 +1301,7 @@ function BillDetail({ tx, onClose, onDelete, onSave }) {
           accountId: Number(form.accountId),
           toAccountId: form.toAccountId ? Number(form.toAccountId) : null,
           categoryId: form.categoryId ? Number(form.categoryId) : null,
+          images: imageList(form.images),
         },
       });
       setEditing(false);
