@@ -693,13 +693,74 @@ h2 { font-size: 18px; }
 .stack > .primary, .stack > .secondary, .form > .primary { align-self: flex-start; }
 .form, .stack { display: flex; flex-direction: column; gap: 10px; }
 label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
-input, select, textarea {
+input, select, textarea, .app-select-btn {
   border: 1px solid var(--field-line);
   background: var(--field);
   border-radius: 10px;
   padding: 8px 10px;
 }
-input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 77, 106, 0.35); border-color: var(--coral); }
+.app-select { position: relative; display: block; width: 100%; min-width: 0; }
+.app-select-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+  color: var(--ink);
+  cursor: pointer;
+}
+.app-select-btn > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-select-btn:disabled { opacity: 0.6; cursor: default; }
+.app-select-caret { color: var(--muted); flex: none; }
+.app-select-required {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  pointer-events: none;
+}
+.app-select-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+.app-select-menu {
+  position: fixed;
+  z-index: 91;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--paper);
+  box-shadow: var(--shadow);
+}
+.app-select-option {
+  width: 100%;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  font-size: 15px;
+}
+.app-select-option:hover { background: var(--hover); }
+.app-select-option > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.app-select-option.active, .app-select-option.active:hover { background: var(--wash-coral); color: var(--coral-dark); font-weight: 600; }
+.app-select-check { color: var(--coral); font-weight: 700; }
+input:focus, select:focus, textarea:focus, .app-select-btn:focus-visible { outline: 2px solid rgba(255, 77, 106, 0.35); border-color: var(--coral); }
 textarea { min-height: 72px; }
 .auth {
   position: relative;
@@ -1202,7 +1263,7 @@ h2 .tx-flag { margin-left: 8px; vertical-align: 2px; }
 /* ===== 手机竖屏（≤720px）：能换行就换行，表格横向滚，触摸目标加大 ===== */
 @media (max-width: 720px) {
   /* iOS 上输入框字号小于 16px 时，聚焦会自动放大整个页面 */
-  input, select, textarea { font-size: 16px; }
+  input, select, textarea, .app-select-btn { font-size: 16px; }
 
   h1 { font-size: 24px; }
   .page { width: 100%; margin: 0 0 16px; }
@@ -1339,7 +1400,7 @@ html, body { overscroll-behavior-y: none; }
 @media (max-width: 900px) {
   html { scroll-padding-top: calc(64px + var(--safe-top)); scroll-padding-bottom: calc(var(--h5-tab-h) + var(--safe-bottom) + 24px); }
   /* iOS 聚焦输入框时字号小于 16px 会把整页放大 */
-  input, select, textarea { font-size: 16px; }
+  input, select, textarea, .app-select-btn { font-size: 16px; }
 
   .h5-bar {
     display: flex;
@@ -1747,6 +1808,54 @@ html, body { overscroll-behavior-y: none; }
     font-size: 12px;
   }
   .h5-sheet-grid a.active { background: var(--wash-coral); color: var(--coral-dark); font-weight: 600; }
+  .h5-pay-notify { width: 100%; min-height: 40px; }
+  .user-page { gap: 14px; }
+  .user-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    background: var(--paper);
+  }
+  .user-card-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .user-card-name b { font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .user-card .ghost { margin-left: auto; flex: none; }
+  .user-menu {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    background: var(--paper);
+    overflow: hidden;
+  }
+  .user-menu h2 {
+    margin: 0;
+    padding: 12px 14px 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  .user-menu .theme-switch { margin: 0 10px 12px; align-self: stretch; }
+  .user-menu .theme-switch button { flex: 1; min-height: 36px; }
+  .user-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 48px;
+    padding: 10px 14px;
+    border: 0;
+    border-top: 1px solid var(--line);
+    background: transparent;
+    color: var(--ink);
+    font-size: 15px;
+    text-align: left;
+  }
+  .user-menu-item.active { color: var(--coral-dark); background: var(--wash-coral); font-weight: 600; }
+  .user-menu-chevron { margin-left: auto; color: var(--muted); font-size: 18px; line-height: 1; }
+  .user-menu .tiny { margin: 0; padding: 0 14px 12px; }
   .h5-sheet-backdrop ~ .fab { visibility: hidden; }
 
   /* 键盘弹起时底栏会挡输入框，收起来 */
@@ -1838,6 +1947,23 @@ html, body { overscroll-behavior-y: none; }
   .hero-cell { padding: 4px 0 0; }
   .hero-cell + .hero-cell { border-left: 0; padding-left: 16px; }
   .card, .trend-card { box-shadow: none; }
+  /* 账户归并的下拉框会按最长账户名撑开，把整页撑出屏幕 */
+  .cards { grid-template-columns: minmax(0, 1fr); }
+  .card { min-width: 0; max-width: 100%; }
+  .card label,
+  .card .item,
+  .card .account,
+  .card .account-main { min-width: 0; max-width: 100%; }
+  .card select,
+  .card input:not([type="checkbox"]):not([type="radio"]):not(.app-select-required),
+  .card textarea {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+  .account-name { min-width: 0; overflow-wrap: anywhere; }
+  .card .item > div:first-child { overflow-wrap: anywhere; }
   .trend-card { margin-top: 12px; }
   .card-head h2 { font-size: 16px; }
   .pie-wrap { flex-direction: column; align-items: center; }
@@ -1854,7 +1980,7 @@ html, body { overscroll-behavior-y: none; }
   .form-row > label:has(input[type="datetime-local"]) { grid-column: 1 / -1; }
   .form-row > label { min-width: 0; }
   .checks { display: flex; flex-wrap: wrap; gap: 8px 12px; }
-  input, select { min-height: 44px; border-radius: 12px; }
+  input:not([type="checkbox"]):not([type="radio"]):not(.app-select-required), select, .app-select-btn { min-height: 44px; border-radius: 12px; }
   textarea { border-radius: 12px; }
   .tx-row { grid-template-columns: 32px minmax(0, 1fr) auto; gap: 8px; padding: 12px 2px; }
   .tx-title { white-space: nowrap; }
@@ -1900,6 +2026,7 @@ html, body { overscroll-behavior-y: none; }
   /* 账本管理：不要再撑成一张必须横滑的宽表，一行账本收成一张卡片 */
   .book-list-card { overflow: visible; }
   .book-create .form-row label { min-width: 0; }
+  .book-aa-toggle input { width: 18px; height: 18px; min-height: 18px; border-radius: 4px; }
   .book-table {
     display: block;
     min-width: 0;
@@ -1941,7 +2068,8 @@ html[data-native='1'] body { overscroll-behavior: none; }
 html[data-native='1'] button { touch-action: manipulation; }
 html[data-native='1'] input,
 html[data-native='1'] select,
-html[data-native='1'] textarea {
+html[data-native='1'] textarea,
+html[data-native='1'] .app-select-btn {
   /* iOS 上字号小于 16px 时聚焦会自动放大整页 */
   font-size: 16px;
 }

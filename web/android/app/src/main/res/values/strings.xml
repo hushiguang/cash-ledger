@@ -4,4 +4,7 @@
     <string name="title_activity_main">轻账单</string>
     <string name="package_name">com.leo.qingji</string>
     <string name="custom_url_scheme">com.leo.qingji</string>
+    <string name="payment_accessibility_label">轻账单付款通知</string>
+    <string name="payment_accessibility_desc">付款后把记一笔拉到微信或支付宝前面，并填入金额和商家。不会自动保存账单。</string>
+    <string name="payment_listener_label">轻账单付款通知</string>
 </resources>

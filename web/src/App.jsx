@@ -1,8 +1,8 @@
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Children, createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api, apiUrl, getApiBase, setApiBase, getToken, setToken, subscribeBusy, track } from './api';
-import { isNative } from './platform';
+import { consumePayDraft, isNative, lastPayNotice, openPayAccessibilitySettings, openPayApp, openPayNotifySettings, openPayPopupSettings } from './platform';
 
 const TYPES = [
   ['expense', '支出'],
@@ -90,6 +90,118 @@ function useTheme() {
   return [theme, setTheme];
 }
 
+function optionText(node) {
+  if (node == null || node === false) return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(optionText).join('');
+  if (node.props) return optionText(node.props.children);
+  return '';
+}
+
+/** 不用系统选择框。安卓弹出的是灰底单选，颜色跟账本对不上。 */
+function AppSelect({ value, onChange, disabled, required, children }) {
+  const [open, setOpen] = useState(false);
+  const buttonRef = useRef(null);
+  const [box, setBox] = useState(null);
+  const options = [];
+  Children.forEach(children, (child) => {
+    if (!child || child.type !== 'option') return;
+    const raw = child.props.value;
+    options.push({
+      value: raw == null ? optionText(child.props.children) : String(raw),
+      label: optionText(child.props.children),
+      disabled: !!child.props.disabled,
+    });
+  });
+  const current = options.find((item) => item.value === String(value ?? ''));
+
+  const place = useCallback(() => {
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const spaceAbove = rect.top;
+    const upward = spaceBelow < 220 && spaceAbove > spaceBelow;
+    const room = Math.max(160, (upward ? spaceAbove : spaceBelow) - 12);
+    const width = Math.min(Math.max(rect.width, 220), window.innerWidth - 16);
+    let left = rect.left;
+    if (left + width > window.innerWidth - 8) left = window.innerWidth - 8 - width;
+    setBox({
+      left: Math.max(8, left),
+      width,
+      top: upward ? undefined : rect.bottom + 6,
+      bottom: upward ? window.innerHeight - rect.top + 6 : undefined,
+      maxHeight: Math.min(320, room),
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    function onKey(event) {
+      if (event.key === 'Escape') setOpen(false);
+    }
+    document.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open, place]);
+
+  function pick(next) {
+    setOpen(false);
+    onChange?.({ target: { value: next } });
+  }
+
+  return (
+    <div className={`app-select${open ? ' open' : ''}`}>
+      <button
+        ref={buttonRef}
+        type="button"
+        className="app-select-btn"
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((valueOpen) => !valueOpen)}
+      >
+        <span>{current ? current.label : '请选择'}</span>
+        <span className="app-select-caret" aria-hidden="true">▾</span>
+      </button>
+      {required && (
+        <input className="app-select-required" tabIndex={-1} aria-hidden="true" value={value ?? ''} required onChange={() => {}} />
+      )}
+      {open && createPortal(
+        <>
+          <button className="app-select-backdrop" type="button" aria-label="关闭选项" onClick={() => setOpen(false)} />
+          <div
+            className="app-select-menu"
+            role="listbox"
+            style={{ left: box?.left, width: box?.width, top: box?.top, bottom: box?.bottom, maxHeight: box?.maxHeight }}
+          >
+            {options.map((item, index) => (
+              <button
+                key={`${item.value}-${index}`}
+                type="button"
+                role="option"
+                aria-selected={item.value === String(value ?? '')}
+                className={`app-select-option${item.value === String(value ?? '') ? ' active' : ''}`}
+                disabled={item.disabled}
+                onClick={() => pick(item.value)}
+              >
+                <span>{item.label}</span>
+                {item.value === String(value ?? '') && <span className="app-select-check" aria-hidden="true">✓</span>}
+              </button>
+            ))}
+          </div>
+        </>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
 function ThemeSwitch() {
   const [theme, setTheme] = useTheme();
   const options = [['system', '跟随系统'], ['light', '亮色'], ['dark', '暗色']];
@@ -142,13 +254,112 @@ function useScrollLock(active) {
   }, [active]);
 }
 
-function CreateBillModal({ open, onClose, onSaved }) {
+// 微信账单卡片上的「使用零钱支付」「使用招商银行信用卡(3116)支付」对到已有账户。
+const PAY_ACCOUNT_NAMES = {
+  零钱: '微信零钱',
+  微信: '微信零钱',
+  微信支付: '微信零钱',
+  零钱通: '零钱通',
+  余额: '支付宝余额',
+  账户余额: '支付宝余额',
+  支付宝: '支付宝余额',
+  余额宝: '余额宝',
+  花呗: '花呗',
+  花呗分期: '花呗',
+  招商银行: '招商银行储蓄卡(5568)',
+  '招商银行(5568)': '招商银行储蓄卡(5568)',
+  招商银行储蓄卡: '招商银行储蓄卡(5568)',
+  '招商银行信用卡(3116)': '招商银行信用卡(3116)',
+  招商银行信用卡: '招商银行信用卡(3116)',
+};
+
+function payMethodText(note) {
+  const line = String(note || '').split('\n').map((item) => item.trim()).find((item) => /^支付方式[：:]/.test(item));
+  if (!line) return '';
+  return line.replace(/^支付方式[：:]/, '').replace(/^使用/, '').replace(/支付$/, '').replace(/[「」“”"']/g, '').replace(/（/g, '(').replace(/）/g, ')').trim();
+}
+
+function stripPayMethod(note) {
+  return String(note || '').split('\n').filter((item) => !/^支付方式[：:]/.test(item.trim())).join('\n').trim();
+}
+
+function matchPayAccount(accounts, method) {
+  const raw = String(method || '').trim();
+  if (!raw) return null;
+  const label = PAY_ACCOUNT_NAMES[raw] || raw;
+  const list = (accounts || []).filter((item) => !item.archived);
+  const pick = (name) => list.find((item) => item.name === name && !item.mergedInto) || list.find((item) => item.name === name);
+  let hit = pick(label) || (label !== raw ? pick(raw) : null);
+  if (!hit) {
+    const tail = label.match(/\((\d{4})\)/);
+    if (tail) {
+      const credit = label.includes('信用卡');
+      hit = list.find((item) => !item.mergedInto && item.name.includes(tail[1]) && item.name.includes('信用卡') === credit)
+        || list.find((item) => item.name.includes(tail[1]) && item.name.includes('信用卡') === credit);
+    }
+  }
+  if (hit?.mergedInto) return list.find((item) => item.id === hit.mergedInto) || hit;
+  return hit || null;
+}
+
+function CreateBillModal({ open, seed, onClose, onSaved }) {
   const books = useBooks();
   useScrollLock(open);
   const [form, setForm] = useState(emptyBill);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [hint, setHint] = useState('');
+  const appliedSeed = useRef(0);
+  const filledAccountSeed = useRef(0);
   const shared = !!books.currentBook && books.currentBook.kind !== 'personal';
+  useEffect(() => {
+    if (!open) {
+      if (appliedSeed.current) {
+        appliedSeed.current = 0;
+        filledAccountSeed.current = 0;
+        setForm(emptyBill());
+        setHint('');
+      }
+      return;
+    }
+    if (!seed?.id) return;
+    const method = payMethodText(seed.note);
+    const account = matchPayAccount(books.accounts, method);
+    const from = seed.source === 'alipay' ? '支付宝' : '微信';
+    const filled = ['金额'];
+    if (seed.payee) filled.push(`对方「${seed.payee}」`);
+    if (seed.occurredAt) filled.push('时间');
+    if (account) filled.push(`账户「${account.name}」`);
+    else if (method) filled.push(`支付方式「${method}」没对上账户`);
+    else if (seed.note) filled.push('备注');
+    const hintText = `已从${from}付款页填入${filled.join('、')}，确认后再保存。`;
+    if (appliedSeed.current !== seed.id) {
+      appliedSeed.current = seed.id;
+      filledAccountSeed.current = account ? seed.id : 0;
+      setError('');
+      setForm((current) => ({
+        ...emptyBill(),
+        accountId: account ? String(account.id) : current.accountId,
+        toAccountId: current.toAccountId,
+        categoryId: current.categoryId,
+        type: seed.type === 'income' ? 'income' : 'expense',
+        amount: seed.amount || '',
+        payee: seed.payee || '',
+        note: account ? stripPayMethod(seed.note) : (seed.note || ''),
+        occurredAt: seed.occurredAt || current.occurredAt || emptyBill().occurredAt,
+      }));
+      setHint(hintText);
+      return;
+    }
+    if (!account || filledAccountSeed.current === seed.id) return;
+    filledAccountSeed.current = seed.id;
+    setForm((current) => ({
+      ...current,
+      accountId: String(account.id),
+      note: current.note === (seed.note || '') ? stripPayMethod(seed.note) : current.note,
+    }));
+    setHint(hintText);
+  }, [open, seed, books.accounts]);
   useEffect(() => {
     if (!open) return undefined;
     function onKey(event) {
@@ -186,10 +397,16 @@ function CreateBillModal({ open, onClose, onSaved }) {
     }
   }
 
-  return (
+  return createPortal(
     <div className="modal-backdrop" onClick={onClose}>
       <form className="modal modal-wide modal-grow stack" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()} onSubmit={submit}>
         <h2>记一笔{books.currentBook ? ` · ${books.currentBook.name}` : ''}</h2>
+        {hint && <p className="tiny muted">{hint}</p>}
+        {isNative && seed?.source && (
+          <button className="secondary" type="button" onClick={() => { void openPayApp(seed.source); }}>
+            {seed.source === 'alipay' ? '去支付宝识别详情' : '去微信识别详情'}
+          </button>
+        )}
         {error && <div className="error">{error}</div>}
         {shared ? (
           <SharedBillFields
@@ -208,7 +425,8 @@ function CreateBillModal({ open, onClose, onSaved }) {
           <button className="primary" type="submit" disabled={saving}>{saving ? '保存中…' : '记一笔'}</button>
         </div>
       </form>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -223,6 +441,7 @@ const ICONS = {
   copy: ['M9 9h11v11H9z', 'M5 15H4V4h11v1'],
   book: ['M5 3h15v18H5z', 'M5 3a2.5 2.5 0 0 0 0 18', 'M9.5 7h6', 'M9.5 11h6'],
   users: ['M17 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8', 'M22 21v-2a4 4 0 0 0-3-3.9', 'M16 3.2a4 4 0 0 1 0 7.6'],
+  user: ['M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2', 'M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8'],
   grid: ['M4 4h6.5v6.5H4z', 'M13.5 4H20v6.5h-6.5z', 'M4 13.5h6.5V20H4z', 'M13.5 13.5H20V20h-6.5z'],
 };
 
@@ -331,28 +550,29 @@ function BookSwitch({ books, currentBookId, onChange }) {
 
 function Shell({ user, onLogout, onSaved, children }) {
   const [creating, setCreating] = useState(false);
-  const [moreOpen, setMoreOpen] = useState(false);
+  const [payDraft, setPayDraft] = useState(null);
+  useEffect(() => {
+    function openDraft(draft) {
+      if (!draft?.amount || !draft.id) return;
+      sessionStorage.removeItem('qingji.payDraft');
+      setPayDraft(draft);
+      setCreating(true);
+    }
+    function onDraft(event) {
+      openDraft(event.detail);
+    }
+    window.addEventListener('qingji:payDraft', onDraft);
+    const pending = consumePayDraft();
+    if (pending) openDraft(pending);
+    return () => window.removeEventListener('qingji:payDraft', onDraft);
+  }, []);
   const { pathname } = useLocation();
   const books = useBooksSource();
   const { books: bookList, currentBookId, setCurrentBookId } = books;
   const groups = navGroups(user.isAdmin);
   const primary = groups[0].items;
   const moreItems = groups.slice(1).flatMap((group) => group.items);
-  const moreActive = moreItems.some(([to]) => pathname === to);
-  useScrollLock(moreOpen);
-  useEffect(() => { setMoreOpen(false); }, [pathname]);
-  useEffect(() => {
-    const media = window.matchMedia('(max-width: 900px)');
-    function onChange() { if (!media.matches) setMoreOpen(false); }
-    media.addEventListener('change', onChange);
-    return () => media.removeEventListener('change', onChange);
-  }, []);
-  useEffect(() => {
-    if (!moreOpen) return undefined;
-    function onKey(event) { if (event.key === 'Escape') setMoreOpen(false); }
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [moreOpen]);
+  const userTabActive = pathname === '/me' || moreItems.some(([to]) => pathname === to);
   return (
     <BooksContext.Provider value={books}>
       <div className="app-shell">
@@ -396,44 +616,75 @@ function Shell({ user, onLogout, onSaved, children }) {
               <span>{label}</span>
             </NavLink>
           ))}
-          <button
-            type="button"
-            className={moreOpen || moreActive ? 'active' : ''}
-            aria-expanded={moreOpen}
-            aria-controls="h5-more"
-            onClick={() => setMoreOpen((open) => !open)}
-          >
-            <Icon name="grid" size={22} />
-            <span>更多</span>
-          </button>
+          <NavLink to="/me" className={userTabActive ? 'active' : ''}>
+            <Icon name="user" size={22} />
+            <span>用户</span>
+          </NavLink>
         </nav>
-        {moreOpen && (
-          <>
-            <button className="h5-sheet-backdrop" type="button" aria-label="关闭更多" onClick={() => setMoreOpen(false)} />
-            <div className="h5-sheet" id="h5-more" role="dialog" aria-label="更多">
-              <div className="h5-sheet-user">
-                <span className="me-avatar">{user.displayName.slice(0, 1)}</span>
-                <span className="me-name" title={user.displayName}>{user.displayName}{user.isAdmin ? ' · 管理员' : ''}</span>
-                <button className="ghost" type="button" onClick={onLogout}>退出</button>
-              </div>
-              <ThemeSwitch />
-              <div className="h5-sheet-grid">
-                {moreItems.map(([to, label, icon]) => (
-                  <NavLink key={to} to={to} onClick={() => setMoreOpen(false)}>
-                    <Icon name={icon} size={22} />
-                    <span>{label}</span>
-                  </NavLink>
-                ))}
-              </div>
-            </div>
-          </>
-        )}
         <button className="fab" type="button" title="记一笔" aria-label="记一笔" onClick={() => setCreating(true)}>
           <span className="fab-plus">+</span>
         </button>
-        <CreateBillModal open={creating} onClose={() => setCreating(false)} onSaved={onSaved} />
+        <CreateBillModal open={creating} seed={payDraft} onClose={() => { setCreating(false); setPayDraft(null); }} onSaved={onSaved} />
       </div>
     </BooksContext.Provider>
+  );
+}
+
+function UserPage({ user, onLogout }) {
+  const groups = navGroups(user.isAdmin).slice(1);
+  const [payHeard, setPayHeard] = useState('');
+  useEffect(() => {
+    if (!isNative) return undefined;
+    let alive = true;
+    void lastPayNotice().then((text) => { if (alive) setPayHeard(text); });
+    return () => { alive = false; };
+  }, []);
+  return (
+    <div className="page stack user-page">
+      <div className="user-card">
+        <span className="me-avatar">{user.displayName.slice(0, 1)}</span>
+        <div className="user-card-name">
+          <b>{user.displayName}</b>
+          <span className="tiny muted">{user.isAdmin ? '管理员' : '成员'}</span>
+        </div>
+        <button className="ghost" type="button" onClick={onLogout}>退出</button>
+      </div>
+      <section className="user-menu" aria-label="外观">
+        <h2>外观</h2>
+        <ThemeSwitch />
+      </section>
+      {groups.map((group) => (
+        <section className="user-menu" key={group.title} aria-label={group.title}>
+          <h2>{group.title}</h2>
+          {group.items.map(([to, label, icon]) => (
+            <NavLink key={to} to={to} className="user-menu-item">
+              <Icon name={icon} />
+              <span>{to === '/users' ? '用户管理' : label}</span>
+              <span className="user-menu-chevron" aria-hidden="true">›</span>
+            </NavLink>
+          ))}
+        </section>
+      ))}
+      {isNative && (
+        <section className="user-menu" aria-label="付款识别">
+          <h2>付款识别</h2>
+          <button className="user-menu-item" type="button" onClick={() => { void openPayNotifySettings(); }}>
+            <span>允许读取付款通知</span>
+            <span className="user-menu-chevron" aria-hidden="true">›</span>
+          </button>
+          <button className="user-menu-item" type="button" onClick={() => { void openPayAccessibilitySettings(); }}>
+            <span>允许无障碍拉起</span>
+            <span className="user-menu-chevron" aria-hidden="true">›</span>
+          </button>
+          <button className="user-menu-item" type="button" onClick={() => { void openPayPopupSettings(); }}>
+            <span>允许后台弹出界面</span>
+            <span className="user-menu-chevron" aria-hidden="true">›</span>
+          </button>
+          <p className="tiny muted">通知使用权负责读到「已支付」。无障碍里打开「轻账单付款通知」，付款后才会自动弹出记一笔。确认后才会保存。</p>
+          {payHeard && <p className="tiny muted">最近读到：{payHeard}</p>}
+        </section>
+      )}
+    </div>
   );
 }
 
@@ -579,28 +830,28 @@ function BookFields({ form, setForm, accounts, categories, showTime = true, show
   return (
     <div className="form-row wrap">
       <label>类型
-        <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value, categoryId: '' })}>
+        <AppSelect value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value, categoryId: '' })}>
           {TYPES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-        </select>
+        </AppSelect>
       </label>
       <label>金额<input value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required /></label>
       {showTime && <label>时间<input type="datetime-local" value={form.occurredAt} onChange={(e) => setForm({ ...form, occurredAt: e.target.value })} required /></label>}
       <label>{form.type === 'transfer' ? '转出账户' : '账户'}
-        <select value={form.accountId} onChange={(e) => setForm({ ...form, accountId: e.target.value })} required>
+        <AppSelect value={form.accountId} onChange={(e) => setForm({ ...form, accountId: e.target.value })} required>
           <option value="">请选择</option>
           {accounts.filter((a) => !a.archived).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-        </select>
+        </AppSelect>
       </label>
       {form.type === 'transfer' ? (
         <label>转入账户
-          <select value={form.toAccountId} onChange={(e) => setForm({ ...form, toAccountId: e.target.value })} required>
+          <AppSelect value={form.toAccountId} onChange={(e) => setForm({ ...form, toAccountId: e.target.value })} required>
             <option value="">请选择</option>
             {accounts.filter((a) => !a.archived).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </select>
+          </AppSelect>
         </label>
       ) : (
         <label>分类
-          <select value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}>
+          <AppSelect value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}>
             <option value="">未分类</option>
             {cats.filter((c) => !c.parentId).map((parent) => (
               <optgroup key={parent.id} label={parent.name}>
@@ -610,7 +861,7 @@ function BookFields({ form, setForm, accounts, categories, showTime = true, show
                 ))}
               </optgroup>
             ))}
-          </select>
+          </AppSelect>
         </label>
       )}
       <label className="field-full">对方<input value={form.payee} onChange={(e) => setForm({ ...form, payee: e.target.value })} /></label>
@@ -748,9 +999,9 @@ function SharedBillFields({ form, setForm, accounts, categories, participants = 
   return (
     <div className="form-row wrap">
       <label>收支
-        <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
+        <AppSelect value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
           {[['expense', '支出'], ['income', '收入']].map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-        </select>
+        </AppSelect>
       </label>
       <label>金额<input value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required /></label>
       {showTime && <label>时间<input type="datetime-local" value={form.occurredAt} onChange={(e) => setForm({ ...form, occurredAt: e.target.value })} /></label>}
@@ -779,10 +1030,10 @@ function SharedBillFields({ form, setForm, accounts, categories, participants = 
         </datalist>
       </label>
       <label>账户（可留空）
-        <select value={form.accountId} onChange={(e) => setForm({ ...form, accountId: e.target.value })}>
+        <AppSelect value={form.accountId} onChange={(e) => setForm({ ...form, accountId: e.target.value })}>
           <option value="">不填</option>
           {accounts.filter((a) => !a.archived).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-        </select>
+        </AppSelect>
       </label>
       {requireMember && (
         <div className="field-full">
@@ -2121,28 +2372,28 @@ function Bills() {
             : ''}
         </button>
         <label>类型
-          <select value={type} onChange={(e) => setType(e.target.value)}>
+          <AppSelect value={type} onChange={(e) => setType(e.target.value)}>
             <option value="">全部</option>
             {TYPES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-          </select>
+          </AppSelect>
         </label>
         <label>来源
-          <select value={source} onChange={(e) => setSource(e.target.value)}>
+          <AppSelect value={source} onChange={(e) => setSource(e.target.value)}>
             <option value="">全部</option>
             {Object.entries(SOURCES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-          </select>
+          </AppSelect>
         </label>
         <label>账户
-          <select value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+          <AppSelect value={accountId} onChange={(e) => setAccountId(e.target.value)}>
             <option value="">全部</option>
             {/* 只列主账户：已合并的旧账户本身没有账单，选它查不到东西 */}
             {books.accounts.filter((a) => !a.archived && !a.mergedInto).map((a) => (
               <option key={a.id} value={a.id}>{a.name}</option>
             ))}
-          </select>
+          </AppSelect>
         </label>
         <label>分类
-          <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
+          <AppSelect value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
             <option value="">全部</option>
             <option value="none">未分类</option>
             {catParents.map((parent) => (
@@ -2151,7 +2402,7 @@ function Bills() {
                 {catChildrenOf(parent.id).map((child) => <option key={child.id} value={child.id}>{child.name}</option>)}
               </optgroup>
             ))}
-          </select>
+          </AppSelect>
         </label>
         <label>开始<input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
         <label>结束<input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
@@ -2471,9 +2722,9 @@ function Recurring() {
         />
         <div className="form-row">
           <label>周期
-            <select value={form.frequency} onChange={(e) => setForm({ ...form, frequency: e.target.value })}>
+            <AppSelect value={form.frequency} onChange={(e) => setForm({ ...form, frequency: e.target.value })}>
               {FREQS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-            </select>
+            </AppSelect>
           </label>
           {form.frequency === 'interval' && (
             <label>间隔天数<input type="number" min="1" value={form.intervalDays} onChange={(e) => setForm({ ...form, intervalDays: Number(e.target.value) })} /></label>
@@ -2861,7 +3112,7 @@ function ImportPage() {
         {error && <div className="error">{error}</div>}
         {message && <p>{message}</p>}
         <label>来源
-          <select value={source} onChange={(e) => setSource(e.target.value)}>
+          <AppSelect value={source} onChange={(e) => setSource(e.target.value)}>
             <option value="auto">自动识别</option>
             <option value="wechat">微信</option>
             <option value="alipay">支付宝</option>
@@ -2869,7 +3120,7 @@ function ImportPage() {
             <option value="qianji">钱迹</option>
             <option value="cmb">招商银行</option>
             <option value="custom">自定义</option>
-          </select>
+          </AppSelect>
         </label>
         <label>文件
           <input type="file" accept=".csv,.xlsx,.xls,.txt,.pdf" multiple onChange={(e) => setFiles([...(e.target.files || [])])} required={!files.length} />
@@ -2891,18 +3142,18 @@ function ImportPage() {
           <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
             {MAP_FIELDS.map(([field, label]) => (
               <label key={field}>{label}
-                <select value={mapping[field] || ''} onChange={(e) => setMapping({ ...mapping, [field]: e.target.value })}>
+                <AppSelect value={mapping[field] || ''} onChange={(e) => setMapping({ ...mapping, [field]: e.target.value })}>
                   <option value="">不映射</option>
                   {mappingFile.headers.map((header) => <option key={header} value={header}>{header}</option>)}
-                </select>
+                </AppSelect>
               </label>
             ))}
           </div>
           <label>没有「收/支」列时全部记为
-            <select value={mapping.defaultType || 'expense'} onChange={(e) => setMapping({ ...mapping, defaultType: e.target.value })}>
+            <AppSelect value={mapping.defaultType || 'expense'} onChange={(e) => setMapping({ ...mapping, defaultType: e.target.value })}>
               <option value="expense">支出</option>
               <option value="income">收入</option>
-            </select>
+            </AppSelect>
           </label>
           {parsing && <p className="loading">正在按映射解析…</p>}
           <button className="primary" type="submit" disabled={parsing}>{parsing ? '解析中…' : '按映射解析'}</button>
@@ -2946,24 +3197,24 @@ function ImportPage() {
             {/* 银行卡流水的支付方式全是同一个（招商银行），按它筛没意义，这时只留渠道下拉 */}
             {(!hasBankFile || payOptions.length > 1) && (
               <label>只导入支付方式
-                <select value={payFilter} onChange={(e) => applyFilter(e.target.value, channelFilter)}>
+                <AppSelect value={payFilter} onChange={(e) => applyFilter(e.target.value, channelFilter)}>
                   <option value="">全部（{rows.filter((row) => !row.skipReason).length} 笔）</option>
                   {bankCount > 0 && <option value={BANK_CHANNEL}>银行卡渠道（{bankCount} 笔）</option>}
                   {payOptions.map((item) => (
                     <option key={item.name} value={item.name}>{item.name}（{item.count} 笔）</option>
                   ))}
-                </select>
+                </AppSelect>
               </label>
             )}
             {hasBankFile && (
               <label>银行卡里的第三方支付
-                <select value={channelFilter} onChange={(e) => applyFilter(payFilter, e.target.value)}>
+                <AppSelect value={channelFilter} onChange={(e) => applyFilter(payFilter, e.target.value)}>
                   <option value="">全部（{rows.filter((row) => !row.skipReason).length} 笔）</option>
                   <option value="none">只留纯银行卡，排除微信/支付宝/京东（{channelCounts.none} 笔）</option>
                   {THIRD_PARTY_CHANNELS.map(([key, label]) => (
                     <option key={key} value={key}>只看{label}（{channelCounts[key]} 笔）</option>
                   ))}
-                </select>
+                </AppSelect>
               </label>
             )}
             {(payFilter || channelFilter) && (
@@ -3058,9 +3309,9 @@ function AccountsPage() {
             <div className="form-row">
               <label>名称<input value={account.name} onChange={(e) => setAccount({ ...account, name: e.target.value })} required /></label>
               <label>类型
-                <select value={account.kind} onChange={(e) => setAccount({ ...account, kind: e.target.value })}>
+                <AppSelect value={account.kind} onChange={(e) => setAccount({ ...account, kind: e.target.value })}>
                   {ACCOUNT_KINDS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                </select>
+                </AppSelect>
               </label>
               <label>初始余额<input value={account.initial} onChange={(e) => setAccount({ ...account, initial: e.target.value })} /></label>
             </div>
@@ -3094,16 +3345,16 @@ function AccountsPage() {
           <p className="muted">把一个账户归到另一个账户下，导入和统计都按同一个账户算。归并后账单里的旧名字会自动认成目标账户。</p>
           <form className="stack" onSubmit={(e) => { e.preventDefault(); run(async () => { await api('/api/accounts/merge', { method: 'POST', body: { sourceId: Number(merge.sourceId), targetId: Number(merge.targetId) } }); setMerge({ sourceId: '', targetId: '' }); }); }}>
             <label>要归并的账户
-              <select value={merge.sourceId} onChange={(e) => setMerge({ ...merge, sourceId: e.target.value })} required>
+              <AppSelect value={merge.sourceId} onChange={(e) => setMerge({ ...merge, sourceId: e.target.value })} required>
                 <option value="">请选择</option>
                 {accounts.filter((a) => !a.archived || a.mergedInto).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-              </select>
+              </AppSelect>
             </label>
             <label>归到哪个账户
-              <select value={merge.targetId} onChange={(e) => setMerge({ ...merge, targetId: e.target.value })} required>
+              <AppSelect value={merge.targetId} onChange={(e) => setMerge({ ...merge, targetId: e.target.value })} required>
                 <option value="">请选择</option>
                 {primary.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-              </select>
+              </AppSelect>
             </label>
             <button className="primary" type="submit">归并</button>
           </form>
@@ -3120,10 +3371,10 @@ function AccountsPage() {
             <div className="form-row">
               <label>叫法<input value={alias.alias} onChange={(e) => setAlias({ ...alias, alias: e.target.value })} placeholder="余额&红包" required /></label>
               <label>对应账户
-                <select value={alias.accountId} onChange={(e) => setAlias({ ...alias, accountId: e.target.value })} required>
+                <AppSelect value={alias.accountId} onChange={(e) => setAlias({ ...alias, accountId: e.target.value })} required>
                   <option value="">请选择</option>
                   {primary.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-                </select>
+                </AppSelect>
               </label>
             </div>
             <button className="primary" type="submit">添加</button>
@@ -3414,7 +3665,7 @@ function CategoriesPage() {
               </div>
               <form className="cat-edit" onSubmit={addRule} style={{ marginTop: 12 }}>
                 <input value={ruleKeyword} onChange={(e) => setRuleKeyword(e.target.value)} placeholder="关键词，如 美团" required />
-                <select value={ruleCategoryId} onChange={(e) => setRuleCategoryId(e.target.value)} required>
+                <AppSelect value={ruleCategoryId} onChange={(e) => setRuleCategoryId(e.target.value)} required>
                   <option value="">归到哪个分类</option>
                   {[['expense', '支出'], ['income', '收入']].map(([value, label]) => (
                     <optgroup key={value} label={label}>
@@ -3423,7 +3674,7 @@ function CategoriesPage() {
                       ))}
                     </optgroup>
                   ))}
-                </select>
+                </AppSelect>
                 <button className="primary small" type="submit" disabled={!ruleKeyword.trim() || !ruleCategoryId}>添加规则</button>
                 <span className="spacer" />
                 <button className="secondary small" type="button" disabled={applying || !rules.length} onClick={applyRules}>
@@ -3795,11 +4046,11 @@ function DuplicatesPage() {
             )}
             <span className="spacer" />
             <label className="row tiny">批量保留
-              <select value={keepIndex} onChange={(e) => setKeepIndex(Number(e.target.value))}>
+              <AppSelect value={keepIndex} onChange={(e) => setKeepIndex(Number(e.target.value))}>
                 {Array.from({ length: maxKeep }, (_, index) => (
                   <option key={index} value={index}>第 {index + 1} 条</option>
                 ))}
-              </select>
+              </AppSelect>
             </label>
             <button className="secondary small" type="button" disabled={!pickedGroups.length || busy === 'bulk'} onClick={bulkIgnore}>不是重复</button>
             <button className="danger small" type="button" disabled={!pickedGroups.length || busy === 'bulk'} onClick={bulkResolve}>
@@ -4082,11 +4333,11 @@ function BookEditModal({ book, onClose, onChanged }) {
         <form className="form-row wrap" onSubmit={save}>
           <label>名称<input value={name} onChange={(e) => setName(e.target.value)} required /></label>
           <label>类型
-            <select value={kind} onChange={(e) => setKind(e.target.value)} disabled={personal}>
+            <AppSelect value={kind} onChange={(e) => setKind(e.target.value)} disabled={personal}>
               {personal
                 ? <option value="personal">个人</option>
                 : BOOK_KIND_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-            </select>
+            </AppSelect>
           </label>
           <button className="primary" type="submit" disabled={busy}>保存</button>
         </form>
@@ -4412,9 +4663,9 @@ function BooksPage() {
           <form className="form-row wrap" onSubmit={create}>
             <label>账本名<input value={name} onChange={(e) => setName(e.target.value)} placeholder="比如 泰国游、家里" required /></label>
             <label>类型
-              <select value={kind} onChange={(e) => setKind(e.target.value)}>
+              <AppSelect value={kind} onChange={(e) => setKind(e.target.value)}>
                 {BOOK_KIND_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-              </select>
+              </AppSelect>
             </label>
             <label className="book-aa-toggle">
               <input
@@ -4704,9 +4955,9 @@ function SharePage() {
               </datalist>
             </label>
             <label>收支
-              <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
+              <AppSelect value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
                 {[['expense', '我付的'], ['income', '我收的']].map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-              </select>
+              </AppSelect>
             </label>
             <label>金额<input value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required /></label>
             <label>时间<input type="datetime-local" value={form.occurredAt} onChange={(e) => setForm({ ...form, occurredAt: e.target.value })} /></label>
@@ -4835,6 +5086,7 @@ export function App() {
           <Route path="/categories" element={<CategoriesPage />} />
           <Route path="/duplicates" element={<DuplicatesPage />} />
           <Route path="/books" element={<BooksPage />} />
+          <Route path="/me" element={<UserPage user={user} onLogout={logout} />} />
           <Route path="/share/:token" element={<SharePage />} />
           <Route path="/users" element={user.isAdmin ? <UsersPage /> : <Navigate to="/" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
