@@ -3,7 +3,6 @@ import XLSX from 'xlsx';
 import { PDFParse } from 'pdf-parse';
 import { parseDateTime } from './dates.js';
 import { amountMark, yuanToCents } from './money.js';
-import { inferTransferTarget } from './transfer-rules.js';
 import { resolveCategoryPath } from './taxonomy.js';
 
 export class ImportError extends Error {
@@ -281,32 +280,6 @@ function finalize(row) {
     else if (!item.type) item.skipReason = '无法识别类型';
     else if (item.amountCents == null) item.skipReason = '无法识别金额';
     else if (item.amountCents <= 0) item.skipReason = '金额为 0';
-    else {
-      const payee = String(item.payee || '');
-      const note = String(item.note || '');
-      const cat = String(item.categoryName || '');
-      // 信用借还、投资理财等不计收支，转为 transfer 类型导入账单
-      if (payee.includes('胡仕广支付宝转账')) {
-        item.type = 'transfer';
-        item.categoryName = '';
-      } else if (payee === '信用卡还款' || note === '信用卡还款 | 信用卡还款') {
-        item.type = 'transfer';
-        item.categoryName = '';
-      } else if (payee.includes('肯特瑞小金库网银平台')) {
-        item.type = 'transfer';
-        item.categoryName = '';
-      } else if (cat === '投资理财') {
-        item.type = 'transfer';
-        item.categoryName = '';
-      }
-      // 百信银行：去掉不计收支限制，小额利息等正常走分类逻辑
-      // 个贷放款不做特殊处理：招商银行流水自带正负号，放款进账是收入、划走是支出。
-      // 账单没给「对方账户」时按收款方推断去向，别让钱扣了却没有去处。
-      if (item.type === 'transfer' && !item.toAccountName) {
-        const hit = inferTransferTarget(item);
-        if (hit) item.toAccountName = hit.target;
-      }
-    }
   }
   if (item.amountCents != null) item.amountCents = Math.abs(item.amountCents);
   return item;
@@ -696,9 +669,9 @@ export function detectSource(headers, filename = '') {
   return 'custom';
 }
 
-function fixCmbWeirdChars(text) {
+function fixCmbWeirdChars(text, fixes) {
   if (!text) return text;
-  return text
+  let s = text
     .replace(/北京扩列䤯技有斮公司/g, '北京扩列科技有限公司')
     .replace(/北京瑞地䤯技有斮公司/g, '北京瑞地科技有限公司')
     .replace(/支付宝-溢棷敟火摣/g, '支付宝-消费')
@@ -776,10 +749,8 @@ function fixCmbWeirdChars(text) {
     .replace(/摔垪/g, '银行')
     .replace(/濝中/g, '（中')
     .replace(/国濞/g, '国）')
-    .replace(/倿仕广报摞廄岗/g, '胡仕广报销到岗')
     .replace(/䙒付彸在双向䯙商户/g, '直付通在双向类商户')
     .replace(/代发款柗/g, '代发款项')
-    .replace(/倿/g, '胡')
     .replace(/濝对䤟濞/g, '资金清算')
     .replace(/先动嫿提/g, '自动计提')
     .replace(/利息濯/g, '利息税')
@@ -797,9 +768,13 @@ function fixCmbWeirdChars(text) {
     .replace(/现愯/g, '现金')
     .replace(/弶款/g, '还款')
     .replace(/岕/g, '卡');
+  if (fixes && fixes.length) {
+    for (const f of fixes) s = s.split(f.garbled).join(f.correct);
+  }
+  return s;
 }
 
-function parseCmbPdf(text) {
+function parseCmbPdf(text, fixes) {
   const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
 
   const dataLines = [];
@@ -828,7 +803,7 @@ function parseCmbPdf(text) {
   let current = null;
   for (const line of dataLines) {
     if (/^\d{4}-\d{2}-\d{2}\s/.test(line)) {
-      if (current) recordsRaw.push(fixCmbWeirdChars(current));
+      if (current) recordsRaw.push(fixCmbWeirdChars(current, fixes));
       current = line;
     } else if (current) {
       // 招商银行 PDF 中 "财付通-微信支付-单字" 常被截断到下一行，需直接拼接
@@ -839,7 +814,7 @@ function parseCmbPdf(text) {
       }
     }
   }
-  if (current) recordsRaw.push(fixCmbWeirdChars(current));
+  if (current) recordsRaw.push(fixCmbWeirdChars(current, fixes));
 
   const KNOWN_SUMMARIES = [
     '代发工资', '信用卡还款', '支付宝转账提现',
@@ -921,7 +896,7 @@ function parseCmbPdf(text) {
     if (customer) note += ' | ' + customer;
 
     let categoryName = '';
-    if (summary.includes('工资') || payee.includes('慧摩尔')) categoryName = '工资';
+    if (summary.includes('工资')) categoryName = '工资';
     else if (summary.includes('还款')) categoryName = '转账';
     else if (summary.includes('利息') || customer.includes('结息')) categoryName = '理财';
     else if (summary.includes('消费') || summary.includes('直付通')) categoryName = '购物';
@@ -951,7 +926,7 @@ const PARSERS = {
   qianji: parseQianji,
 };
 
-export async function parseFile(buffer, filename, source, mapping) {
+export async function parseFile(buffer, filename, source, mapping, fixes) {
   const lower = (filename || '').toLowerCase();
   if (lower.endsWith('.pdf')) {
     const parser = new PDFParse({ data: buffer });
@@ -960,7 +935,7 @@ export async function parseFile(buffer, filename, source, mapping) {
     if (!text.includes('招商银行交易流水') && !text.includes('China Merchants Bank')) {
       throw new ImportError('不支持的PDF账单格式，目前仅支持招商银行交易流水PDF');
     }
-    const rows = parseCmbPdf(text);
+    const rows = parseCmbPdf(text, fixes);
     return { needsMapping: false, source: 'cmb', headers: [], rows };
   }
 

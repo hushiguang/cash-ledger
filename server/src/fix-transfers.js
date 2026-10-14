@@ -10,15 +10,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { db, dataDirPath } from './db.js';
 import { ensureCategory } from './ledger.js';
-import { inferTransferTarget } from './transfer-rules.js';
+import { matchTransferRule } from './transfer-rules.js';
 
 const BASE = "t.user_id = ? AND t.type = 'transfer' AND t.to_account_id IS NULL";
-
-function accountOf(userId, name) {
-  const row = db.prepare('SELECT * FROM accounts WHERE user_id = ? AND name = ?').get(userId, name);
-  if (!row) throw new Error(`缺少账户：${name}`);
-  return row;
-}
 
 // 账单备注里一般带着原始分类，例如「交易类型：数码电器」
 function rawCategory(row) {
@@ -41,10 +35,10 @@ function plan(userId) {
   const skipped = [];
   const linked = new Map();
   for (const row of rows) {
-    const hit = inferTransferTarget(row);
-    if (hit) {
-      const target = accountOf(userId, hit.target);
-      if (target.id !== row.account_id) {
+    const hit = matchTransferRule(userId, row);
+    if (hit && hit.target_account_id) {
+      const target = db.prepare('SELECT * FROM accounts WHERE id = ? AND user_id = ?').get(hit.target_account_id, userId);
+      if (target && target.id !== row.account_id) {
         linked.set(hit.label, (linked.get(hit.label) || 0) + 1);
         assigned.push({ row, targetId: target.id });
         continue;

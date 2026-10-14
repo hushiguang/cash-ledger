@@ -1142,6 +1142,19 @@ h2 .tx-flag { margin-left: 8px; vertical-align: 2px; }
   box-shadow: 0 24px 60px rgba(28, 20, 40, 0.22);
 }
 .modal.modal-wide { width: min(860px, 100%); }
+/* 弹窗里的编辑表单（转账规则/招行乱码）：竖排、字段整行 */
+.modal .cat-edit { flex-direction: column; align-items: stretch; gap: 10px; }
+.modal .cat-edit > * { width: 100%; }
+.modal .cat-edit > label { display: flex; flex-direction: row; align-items: center; gap: 6px; }
+/* 规则/乱码条目：左描述右操作；窄屏下整行卡片 */
+.rule-chip .chip-body { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.rule-chip .chip-actions { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+@media (max-width: 900px) {
+  .cat-chip.rule-chip { width: 100%; border-radius: 14px; padding: 10px 12px; align-items: flex-start; justify-content: space-between; gap: 8px; }
+  .rule-chip .chip-body { flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
+  .rule-chip .chip-body > b { flex: 1 1 100%; }
+  .rule-chip .chip-body code { overflow-wrap: anywhere; }
+}
 .modal.modal-wide.bill-edit {
   display: flex;
   flex-direction: column;

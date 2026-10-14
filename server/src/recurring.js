@@ -1,6 +1,7 @@
 import { db } from './db.js';
 import { ensurePersonalBook } from './books.js';
 import { advance, firstOccurrence, todayString } from './dates.js';
+import { config } from './config.js';
 
 function mapRule(row) {
   if (!row) return null;
@@ -23,7 +24,7 @@ function mapRule(row) {
     yearDay: row.year_day,
     startDate: row.start_date,
     endDate: row.end_date,
-    time: row.time || '09:00',
+    time: row.time || config.recurring.defaultTime,
     nextRun: row.next_run,
     paused: !!row.paused,
   };
@@ -71,7 +72,7 @@ function insertOccurrence(rule, date) {
     'SELECT id FROM transactions WHERE user_id = ? AND source = ? AND external_id = ?',
   ).get(rule.userId, 'recurring', externalId);
   if (exists) return;
-  const time = /^\d{2}:\d{2}$/.test(rule.time) ? rule.time : '09:00';
+  const time = /^\d{2}:\d{2}$/.test(rule.time) ? rule.time : config.recurring.defaultTime;
   db.prepare(`
     INSERT INTO transactions (
       user_id, book_id, type, amount_cents, account_id, to_account_id, category_id,
@@ -136,5 +137,5 @@ export function pendingInMonth(rule, monthStart, monthEnd, today) {
 export function startScheduler() {
   const tick = () => { try { runDue(); } catch (err) { console.error(err); } };
   tick();
-  setInterval(tick, 60 * 1000).unref?.();
+  setInterval(tick, config.scheduler.intervalMs).unref?.();
 }

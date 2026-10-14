@@ -4,9 +4,10 @@
 import https from 'node:https';
 import http from 'node:http';
 import { Buffer } from 'node:buffer';
+import { config } from './config.js';
 
-const HOST_URL = process.env.IMAGE_HOST_URL || '';
-const HOST_TOKEN = process.env.IMAGE_HOST_TOKEN || '';
+const HOST_URL = config.imageProxy.url;
+const HOST_TOKEN = config.imageProxy.token;
 
 function hostOf(value) {
   const text = String(value || '').trim();
@@ -22,11 +23,11 @@ function hostOf(value) {
 // 图片代理只允许回源到图床，避免变成任意 URL 抓取。
 // 没单独配白名单时，默认放行 IMAGE_HOST_URL 的主机（含端口，例如 image.coooo.tech:1443）。
 const ALLOWED_HOSTS = new Set(
-  [HOST_URL, ...String(process.env.IMAGE_HOST_ALLOW_HOSTS || '').split(',')]
+  [HOST_URL, ...config.imageProxy.allowHosts]
     .map(hostOf)
     .filter(Boolean),
 );
-const MAX_BYTES = 12 * 1024 * 1024;
+const MAX_BYTES = config.upload.imageMaxBytes;
 
 export const imageHostConfigured = Boolean(HOST_TOKEN);
 

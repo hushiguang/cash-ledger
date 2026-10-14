@@ -4,13 +4,14 @@ import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { dataDirPath, db } from './db.js';
+import { config } from './config.js';
 
 function secretPath() {
   return path.join(dataDirPath(), 'jwt.secret');
 }
 
 export function jwtSecret() {
-  if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
+  if (config.auth.jwtSecret) return config.auth.jwtSecret;
   const file = secretPath();
   if (fs.existsSync(file)) return fs.readFileSync(file, 'utf8').trim();
   const secret = crypto.randomBytes(32).toString('hex');
@@ -19,7 +20,7 @@ export function jwtSecret() {
 }
 
 export function hashPassword(password) {
-  return bcrypt.hashSync(password, 10);
+  return bcrypt.hashSync(password, config.auth.bcryptRounds);
 }
 
 export function checkPassword(password, hash) {
@@ -27,7 +28,7 @@ export function checkPassword(password, hash) {
 }
 
 export function signUser(user) {
-  return jwt.sign({ id: user.id, username: user.username }, jwtSecret(), { expiresIn: '14d' });
+  return jwt.sign({ id: user.id, username: user.username }, jwtSecret(), { expiresIn: config.auth.jwtExpiry });
 }
 
 export function publicUser(row) {
@@ -64,5 +65,5 @@ export function adminRequired(req, res, next) {
 }
 
 export function allowRegister() {
-  return process.env.ALLOW_REGISTER !== 'false';
+  return config.auth.allowRegister;
 }

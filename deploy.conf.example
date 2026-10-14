@@ -21,3 +21,33 @@ ALLOW_REGISTER=true
 # 图床（账单图片上传用）
 IMAGE_HOST_URL=https://image.coooo.tech:1443/api/index.php
 IMAGE_HOST_TOKEN=1c17b11693cb5ec63859b091c5b9c1b2
+
+# ===== 以下为可选调优项，不填用 server/src/config.js 里的默认值 =====
+# 服务监听地址（默认 0.0.0.0）
+# HOST=0.0.0.0
+# JWT 过期时间（默认 14d）
+# JWT_EXPIRY=14d
+# bcrypt 加密轮数（默认 10）
+# BCRYPT_ROUNDS=10
+# JSON 请求体上限（默认 20mb）
+# JSON_BODY_LIMIT=20mb
+# 单文件上传上限（默认 30mb）
+# UPLOAD_MAX_BYTES=31457280
+# 图片大小上限（默认 12mb）
+# IMAGE_MAX_BYTES=12582912
+# 图片代理缓存秒数（默认 86400）
+# IMAGE_PROXY_CACHE_TTL=86400
+# 流水分页：默认条数 / 上限（默认 500 / 5000）
+# TX_LIMIT=500
+# TX_LIMIT_MAX=5000
+# 跨域来源：留空=允许所有；填逗号分隔域名可限制（默认允许所有）
+# CORS_ORIGINS=
+# 定期账单默认时间（默认 09:00）
+# RECURRING_DEFAULT_TIME=09:00
+# 定时任务间隔毫秒（默认 60000）
+# SCHEDULER_INTERVAL_MS=60000
+# 查重：同账户最低分 / 分组最大数 / 默认窗口天数（默认 75 / 12 / 1）
+# DUP_SAME_ACCOUNT_MIN_SCORE=75
+# DUP_GROUP_MAX_SIZE=12
+# DUP_WINDOW_DAYS=1
+

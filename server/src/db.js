@@ -1,11 +1,11 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { config } from './config.js';
 
-const dataDir = process.env.DATA_DIR || path.join(process.cwd(), 'data');
+const dataDir = config.runtime.dataDir;
 fs.mkdirSync(dataDir, { recursive: true });
 
-const dbPath = process.env.DATABASE_PATH || path.join(dataDir, 'ledger.db');
+const dbPath = config.runtime.databasePath;
 export const db = new DatabaseSync(dbPath);
 
 db.exec(`
@@ -138,6 +138,34 @@ db.exec(`
     UNIQUE (user_id, keyword)
   );
   CREATE INDEX IF NOT EXISTS ix_category_rules_user ON category_rules(user_id);
+
+  -- 转账规则：账单里出现某个关键词/正则，就把它当成「自己的账户→自己的账户」的转账。
+  -- 目标账户从用户自己的账户里选（target_account_id 可为空：只判类型、不指定去向）。
+  CREATE TABLE IF NOT EXISTS transfer_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    label TEXT NOT NULL,
+    pattern TEXT NOT NULL,
+    is_regex INTEGER NOT NULL DEFAULT 0,
+    target_account_id INTEGER REFERENCES accounts(id) ON DELETE CASCADE,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS ix_transfer_rules_user ON transfer_rules(user_id);
+
+  -- 招商银行 PDF 乱码修复：账单里被错误解码的片段 → 正确文本。按用户配置，不写死在源码。
+  -- 解析 CMB PDF 时按当前用户加载并替换，顺序按 position 执行。
+  CREATE TABLE IF NOT EXISTS cmb_text_fixes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    garbled TEXT NOT NULL,
+    correct TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS ix_cmb_text_fixes_user ON cmb_text_fixes(user_id);
 
   CREATE TABLE IF NOT EXISTS duplicate_ignores (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

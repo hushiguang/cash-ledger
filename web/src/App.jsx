@@ -459,6 +459,7 @@ const ICONS = {
   user: ['M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2', 'M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8'],
   grid: ['M4 4h6.5v6.5H4z', 'M13.5 4H20v6.5h-6.5z', 'M4 13.5h6.5V20H4z', 'M13.5 13.5H20V20h-6.5z'],
   share: ['M14 5h5v5', 'M19 5l-8 8', 'M17 13.5V18a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h4.5'],
+  wrench: ['M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z'],
 };
 
 function Icon({ name, size = 18 }) {
@@ -472,7 +473,7 @@ function Icon({ name, size = 18 }) {
 function navGroups(isAdmin) {
   const groups = [
     { title: '记账', items: [['/', '总览', 'home'], ['/calendar', '日历', 'calendar'], ['/bills', '账单', 'list'], ['/recurring', '定期', 'repeat']] },
-    { title: '整理', items: [['/import', '导入', 'download'], ['/accounts', '账户', 'wallet'], ['/categories', '分类', 'tag'], ['/duplicates', '查重', 'copy']] },
+    { title: '整理', items: [['/import', '导入', 'download'], ['/accounts', '账户', 'wallet'], ['/categories', '分类', 'tag'], ['/duplicates', '查重', 'copy'], ['/transfer-rules', '转账规则', 'repeat'], ['/cmb-fixes', '招行乱码', 'wrench']] },
     { title: '协作', items: [['/books', '账本', 'book']] },
   ];
   if (isAdmin) groups[2].items.push(['/users', '用户', 'users']);
@@ -757,6 +758,32 @@ function Shell({ user, onLogout, onSaved, children }) {
         <CreateBillModal open={creating} seed={payDraft} onClose={() => { setCreating(false); setPayDraft(null); }} onSaved={onSaved} />
       </div>
     </BooksContext.Provider>
+  );
+}
+
+function useNarrow() {
+  const query = '(max-width: 900px)';
+  const get = () => typeof window !== 'undefined' && window.matchMedia(query).matches;
+  const [narrow, setNarrow] = useState(get);
+  useEffect(() => {
+    const mq = window.matchMedia(query);
+    const onChange = () => setNarrow(mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  return narrow;
+}
+
+function FormModal({ title, onClose, children }) {
+  useScrollLock(true);
+  return createPortal(
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal stack" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+        <h2>{title}</h2>
+        {children}
+      </div>
+    </div>,
+    document.body
   );
 }
 
@@ -3982,6 +4009,295 @@ const DUP_LEVELS = [
   [65, '宽松'],
 ];
 
+function TransferRules() {
+  const { accounts } = useBooks();
+  const narrow = useNarrow();
+  const [rules, setRules] = useState([]);
+  const [form, setForm] = useState({ id: null, label: '', pattern: '', isRegex: false, targetAccountId: '', enabled: true });
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [confirm, setConfirm] = useState(null);
+  const [modalOpen, setModalOpen] = useState(false);
+
+  const accountName = (id) => (accounts.find((a) => a.id === Number(id)) || {}).name || '';
+  const accountOptions = accounts.filter((a) => !a.archived && !a.mergedInto);
+
+  function load() {
+    return api('/api/transfer-rules').then((data) => setRules(data.rules || []));
+  }
+  useEffect(() => { load().catch(() => {}); }, []);
+
+  function reset() {
+    setForm({ id: null, label: '', pattern: '', isRegex: false, targetAccountId: '', enabled: true });
+  }
+
+  function submit(event) {
+    event.preventDefault();
+    const label = form.label.trim();
+    const pattern = form.pattern.trim();
+    if (!label || !pattern) return;
+    setError('');
+    setNotice('');
+    const body = {
+      label,
+      pattern,
+      isRegex: form.isRegex,
+      targetAccountId: form.targetAccountId ? Number(form.targetAccountId) : null,
+      enabled: form.enabled,
+    };
+    const req = form.id
+      ? api(`/api/transfer-rules/${form.id}`, { method: 'PATCH', body })
+      : api('/api/transfer-rules', { method: 'POST', body });
+    req.then(load)
+      .then(() => { reset(); setModalOpen(false); setNotice(form.id ? '已保存' : '已添加规则'); })
+      .catch((err) => setError(err.message));
+  }
+
+  function editRule(rule) {
+    setForm({
+      id: rule.id,
+      label: rule.label,
+      pattern: rule.pattern,
+      isRegex: !!rule.is_regex,
+      targetAccountId: rule.target_account_id ? String(rule.target_account_id) : '',
+      enabled: rule.enabled !== 0,
+    });
+    setModalOpen(true);
+  }
+
+  const ruleForm = (
+    <form className="cat-edit" onSubmit={submit} style={{ flexWrap: 'wrap' }}>
+      <input value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} placeholder="名称，如 信用卡还款" required />
+      <input value={form.pattern} onChange={(e) => setForm({ ...form, pattern: e.target.value })} placeholder={form.isRegex ? '正则，如 信用卡还款|待清算信用卡' : '关键词，如 信用卡还款'} required />
+      <label style={{ display: 'inline-flex', flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+        <input type="checkbox" checked={form.isRegex} onChange={(e) => setForm({ ...form, isRegex: e.target.checked })} /> 正则
+      </label>
+      <AppSelect value={form.targetAccountId} onChange={(e) => setForm({ ...form, targetAccountId: e.target.value })}>
+        <option value="">转入账户（不指定=只判类型）</option>
+        {accountOptions.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+      </AppSelect>
+      <button className="primary small" type="submit" disabled={!form.label.trim() || !form.pattern.trim()}>{form.id ? '保存' : '添加规则'}</button>
+      <button className="secondary small" type="button" onClick={() => { reset(); setModalOpen(false); }}>取消</button>
+    </form>
+  );
+
+  function removeRule(rule) {
+    setConfirm({
+      title: `删除规则「${rule.label}」？`,
+      body: '删除后，导入账单时不再按这条规则判定转账。',
+      confirmLabel: '删除',
+      onConfirm: () => {
+        setConfirm(null);
+        api(`/api/transfer-rules/${rule.id}`, { method: 'DELETE' })
+          .then(load)
+          .then(() => setNotice(`已删除规则「${rule.label}」`))
+          .catch((err) => setError(err.message));
+      },
+    });
+  }
+
+  function toggleEnabled(rule) {
+    api(`/api/transfer-rules/${rule.id}`, { method: 'PATCH', body: { enabled: rule.enabled === 0 } })
+      .then(load)
+      .catch((err) => setError(err.message));
+  }
+
+  return (
+    <>
+      <div className="page-head">
+        <h1>转账规则</h1>
+      </div>
+      {error && <div className="error" style={{ marginBottom: 12 }}>{error}</div>}
+      {notice && <p className="muted" style={{ marginBottom: 12 }}>{notice}</p>}
+      <p className="muted">
+        导入账单时，如果一笔账单的「对方 / 备注 / 分类」里命中下面某条规则，就把它当成「自己的账户 → 自己的账户」的转账。
+        可指定转入账户（从你自己的账户里选），不指定则只判类型、不填去向。规则按顺序匹配，命中第一条即生效。
+      </p>
+      <div className="card" style={{ marginTop: 12 }}>
+        <div className="tree-head"><h2>已配置规则</h2></div>
+        {rules.length === 0 && <span className="muted">还没有规则。比如「信用卡还款 → 招商银行信用卡」。</span>}
+        <div className="cat-chips" style={{ marginTop: 10 }}>
+          {rules.map((rule) => (
+            <span className="cat-chip rule-chip" key={rule.id}>
+              <span className="chip-body">
+                <b>{rule.label}</b>
+                <span className="muted">
+                  匹配 {rule.is_regex ? <code>/{rule.pattern}/</code> : <code>{rule.pattern}</code>}
+                </span>
+                {rule.target_account_id
+                  ? <span className="muted">→ {accountName(rule.target_account_id)}</span>
+                  : <span className="muted">（只判类型）</span>}
+              </span>
+              <span className="chip-actions">
+                <label className="switch" title="启用">
+                  <input type="checkbox" checked={rule.enabled !== 0} onChange={() => toggleEnabled(rule)} />
+                </label>
+                <button type="button" className="chip-btn" title="编辑" onClick={() => editRule(rule)}>编辑</button>
+                <button type="button" className="chip-btn danger" title="删除" onClick={() => removeRule(rule)}>✕</button>
+              </span>
+            </span>
+          ))}
+        </div>
+      </div>
+      {narrow && (
+        <button className="primary" type="button" style={{ marginTop: 12, width: '100%' }} onClick={() => { reset(); setModalOpen(true); }}>新增规则</button>
+      )}
+      {!narrow && (
+        <div className="card" style={{ marginTop: 12 }}>
+          <div className="tree-head"><h2>{form.id ? '编辑规则' : '新增规则'}</h2></div>
+          {ruleForm}
+        </div>
+      )}
+      {narrow && modalOpen && (
+        <FormModal title={form.id ? '编辑规则' : '新增规则'} onClose={() => { setModalOpen(false); reset(); }}>
+          {ruleForm}
+        </FormModal>
+      )}
+      {confirm && (
+        <ConfirmModal
+          title={confirm.title}
+          body={confirm.body}
+          confirmLabel={confirm.confirmLabel}
+          onClose={() => setConfirm(null)}
+          onConfirm={confirm.onConfirm}
+        />
+      )}
+    </>
+  );
+}
+
+function CmbTextFixes() {
+  const narrow = useNarrow();
+  const [fixes, setFixes] = useState([]);
+  const [form, setForm] = useState({ id: null, garbled: '', correct: '', enabled: true });
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [confirm, setConfirm] = useState(null);
+  const [modalOpen, setModalOpen] = useState(false);
+
+  function load() {
+    return api('/api/cmb-text-fixes').then((data) => setFixes(data.fixes || []));
+  }
+  useEffect(() => { load().catch(() => {}); }, []);
+
+  function reset() {
+    setForm({ id: null, garbled: '', correct: '', enabled: true });
+  }
+
+  function submit(event) {
+    event.preventDefault();
+    const garbled = form.garbled.trim();
+    const correct = form.correct.trim();
+    if (!garbled) return;
+    setError('');
+    setNotice('');
+    const body = { garbled, correct, enabled: form.enabled };
+    const req = form.id
+      ? api(`/api/cmb-text-fixes/${form.id}`, { method: 'PATCH', body })
+      : api('/api/cmb-text-fixes', { method: 'POST', body });
+    req.then(load)
+      .then(() => { reset(); setModalOpen(false); setNotice(form.id ? '已保存' : '已添加修复'); })
+      .catch((err) => setError(err.message));
+  }
+
+  function editFix(fix) {
+    setForm({ id: fix.id, garbled: fix.garbled, correct: fix.correct, enabled: fix.enabled !== 0 });
+    setModalOpen(true);
+  }
+
+  const fixForm = (
+    <form className="cat-edit" onSubmit={submit} style={{ flexWrap: 'wrap' }}>
+      <input value={form.garbled} onChange={(e) => setForm({ ...form, garbled: e.target.value })} placeholder="乱码片段，如 倿仕广报摞廄岗" required />
+      <input value={form.correct} onChange={(e) => setForm({ ...form, correct: e.target.value })} placeholder="正确文本，如 胡仕广报销到岗" />
+      <label style={{ display: 'inline-flex', flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+        <input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} /> 启用
+      </label>
+      <button className="primary small" type="submit" disabled={!form.garbled.trim()}>{form.id ? '保存' : '添加修复'}</button>
+      <button className="secondary small" type="button" onClick={() => { reset(); setModalOpen(false); }}>取消</button>
+    </form>
+  );
+
+  function removeFix(fix) {
+    setConfirm({
+      title: `删除修复「${fix.garbled} → ${fix.correct}」？`,
+      body: '删除后，导入招行 PDF 时这段乱码不再被替换。',
+      confirmLabel: '删除',
+      onConfirm: () => {
+        setConfirm(null);
+        api(`/api/cmb-text-fixes/${fix.id}`, { method: 'DELETE' })
+          .then(load)
+          .then(() => setNotice(`已删除修复「${fix.garbled} → ${fix.correct}」`))
+          .catch((err) => setError(err.message));
+      },
+    });
+  }
+
+  function toggleEnabled(fix) {
+    api(`/api/cmb-text-fixes/${fix.id}`, { method: 'PATCH', body: { enabled: fix.enabled === 0 } })
+      .then(load)
+      .catch((err) => setError(err.message));
+  }
+
+  return (
+    <>
+      <div className="page-head">
+        <h1>招行乱码修复</h1>
+      </div>
+      {error && <div className="error" style={{ marginBottom: 12 }}>{error}</div>}
+      {notice && <p className="muted" style={{ marginBottom: 12 }}>{notice}</p>}
+      <p className="muted">
+        招商银行 PDF 导出时部分文字会被错误解码成乱码（例如名字、商户名）。这里配置「乱码片段 → 正确文本」，
+        导入招行 PDF 时按你配置的顺序逐条替换。姓名等敏感信息只存在你自己的数据库里，不在源码中。
+      </p>
+      <div className="card" style={{ marginTop: 12 }}>
+        <div className="tree-head"><h2>已配置修复</h2></div>
+        {fixes.length === 0 && <span className="muted">还没有修复项。</span>}
+        <div className="cat-chips" style={{ marginTop: 10 }}>
+          {fixes.map((fix) => (
+            <span className="cat-chip rule-chip" key={fix.id}>
+              <span className="chip-body">
+                <code>{fix.garbled}</code>
+                <span className="muted">→</span>
+                <code>{fix.correct}</code>
+              </span>
+              <span className="chip-actions">
+                <label className="switch" title="启用">
+                  <input type="checkbox" checked={fix.enabled !== 0} onChange={() => toggleEnabled(fix)} />
+                </label>
+                <button type="button" className="chip-btn" title="编辑" onClick={() => editFix(fix)}>编辑</button>
+                <button type="button" className="chip-btn danger" title="删除" onClick={() => removeFix(fix)}>✕</button>
+              </span>
+            </span>
+          ))}
+        </div>
+      </div>
+      {narrow && (
+        <button className="primary" type="button" style={{ marginTop: 12, width: '100%' }} onClick={() => { reset(); setModalOpen(true); }}>新增修复</button>
+      )}
+      {!narrow && (
+        <div className="card" style={{ marginTop: 12 }}>
+          <div className="tree-head"><h2>{form.id ? '编辑修复' : '新增修复'}</h2></div>
+          {fixForm}
+        </div>
+      )}
+      {narrow && modalOpen && (
+        <FormModal title={form.id ? '编辑修复' : '新增修复'} onClose={() => { setModalOpen(false); reset(); }}>
+          {fixForm}
+        </FormModal>
+      )}
+      {confirm && (
+        <ConfirmModal
+          title={confirm.title}
+          body={confirm.body}
+          confirmLabel={confirm.confirmLabel}
+          onClose={() => setConfirm(null)}
+          onConfirm={confirm.onConfirm}
+        />
+      )}
+    </>
+  );
+}
+
 function ConfirmModal({ title, body, confirmLabel = '确定', danger = true, busy = false, onClose, onConfirm }) {
   useScrollLock(true);
   return createPortal(
@@ -5352,6 +5668,8 @@ export function App() {
           <Route path="/accounts" element={<AccountsPage />} />
           <Route path="/categories" element={<CategoriesPage />} />
           <Route path="/duplicates" element={<DuplicatesPage />} />
+          <Route path="/transfer-rules" element={<TransferRules />} />
+          <Route path="/cmb-fixes" element={<CmbTextFixes />} />
           <Route path="/books" element={<BooksPage />} />
           <Route path="/me" element={<UserPage user={user} onLogout={logout} />} />
           <Route path="/share/:token" element={<SharePage />} />

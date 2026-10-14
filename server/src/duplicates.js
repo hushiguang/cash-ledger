@@ -4,6 +4,7 @@
 import { db } from './db.js';
 import { centsToYuan } from './money.js';
 import { presentTransaction, selectTransactions } from './ledger.js';
+import { config } from './config.js';
 
 // 一方备注里出现渠道名、另一方账户是同一渠道的钱包 → 基本就是同一次支付的两边记录
 const CHANNELS = [
@@ -41,9 +42,8 @@ function longestCommon(a, b) {
   return best;
 }
 
-// 同一个账户里的两笔要报为重复，至少需要这个分数：
-// 同一时刻(+30) + 商户名一致(+22) + 基线 40 = 92，只有「同额同时刻但商户名对不上」的 70 分会被挡掉
-const SAME_ACCOUNT_MIN_SCORE = 75;
+// 同一个账户里的两笔要报为重复，至少需要这个分数
+const SAME_ACCOUNT_MIN_SCORE = config.duplicates.sameAccountMinScore;
 
 // 备注里记的商户单号（跨平台可能是同一个，能互证是同一笔消费）
 function merchantOrderOf(text) {
@@ -71,36 +71,37 @@ export function scorePair(a, b) {
   const eb = externalIdOf(b);
   if (ea && ea === eb) return { score: 100, reasons: ['交易单号相同'] };
 
-  let score = 40; // 金额相同且分属不同账户
+  const S = config.duplicates.scores;
+  let score = S.baseline; // 金额相同且分属不同账户
 
   const aMin = toMinutes(a.occurred_at);
   const bMin = toMinutes(b.occurred_at);
   const gapMin = Math.abs(aMin - bMin);
   if (String(a.occurred_at) === String(b.occurred_at)) {
-    score += 30;
+    score += S.sameTime;
     reasons.push('同一时刻');
   } else if (dayOf(a.occurred_at) === dayOf(b.occurred_at)) {
-    score += 20;
+    score += S.sameDay;
     reasons.push('同一天');
   } else {
     const hours = Math.round(gapMin / 60);
-    score += 8;
+    score += S.gap;
     reasons.push(hours < 24 ? `相隔 ${hours} 小时` : `相差 ${Math.round(hours / 24)} 天`);
   }
 
   const na = normalizeText(a.payee);
   const nb = normalizeText(b.payee);
   if (na && nb && (na.includes(nb) || nb.includes(na))) {
-    score += 22;
+    score += S.merchantExact;
     reasons.push('商户名一致');
   } else if (longestCommon(na, nb) >= 2) {
-    score += 10;
+    score += S.merchantNear;
     reasons.push('商户名相近');
   }
 
   const channel = channelMatch(a, b) || channelMatch(b, a);
   if (channel) {
-    score += 20;
+    score += S.channel;
     reasons.push(`${channel}渠道互证`);
   }
 
@@ -108,11 +109,11 @@ export function scorePair(a, b) {
   const ma = merchantOrderOf(a.note);
   const mb = merchantOrderOf(b.note);
   if (ma && ma === mb) {
-    score += 25;
+    score += S.order;
     reasons.push('商户单号相同');
   }
 
-  if (Number(a.amount_cents) >= 5000) score += 5; // 大额偶然撞号的概率低
+  if (Number(a.amount_cents) >= 5000) score += S.largeAmount; // 大额偶然撞号的概率低
 
   return { score: Math.min(score, 100), reasons };
 }
@@ -123,7 +124,7 @@ export function pairKey(aId, bId) {
 
 export function findDuplicatePairs(userId, options = {}) {
   const type = ['expense', 'income'].includes(options.type) ? options.type : 'expense';
-  const windowDays = Number(options.windowDays) > 0 ? Number(options.windowDays) : 1;
+  const windowDays = Number(options.windowDays) > 0 ? Number(options.windowDays) : config.duplicates.defaultWindowDays;
   const minScore = Number(options.minScore) || 0;
   const minCents = Number(options.minCents) || 0;
 
@@ -282,7 +283,7 @@ export function findDuplicatePairs(userId, options = {}) {
 // 两两配对会把它们拆成好几对，逐对选「保留哪条」很容易删错。
 // 这里把互相有重叠的配对合并成一组，界面按组展示：一组里挑一条留下，其余一起删。
 export function groupDuplicates(pairs, options = {}) {
-  const maxSize = Number(options.maxSize) || 12;
+  const maxSize = Number(options.maxSize) || config.duplicates.groupMaxSize;
 
   // 只有证据硬的配对才合并成一组：同一时刻、单号相同、商户单号相同，或者分数够高。
   // 否则「金额相同但隔了几天」的小额消费（比如每天 5 元地铁）会被链式串成一大组，
