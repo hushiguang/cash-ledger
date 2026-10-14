@@ -29,7 +29,9 @@ db.exec(`
     kind TEXT NOT NULL,
     initial_cents INTEGER NOT NULL DEFAULT 0,
     sort INTEGER NOT NULL DEFAULT 0,
-    archived INTEGER NOT NULL DEFAULT 0
+    archived INTEGER NOT NULL DEFAULT 0,
+    -- 可空：历史账户没有创建时间，老代码建账户时也不带这一列
+    created_at TEXT
   );
 
   CREATE TABLE IF NOT EXISTS categories (
@@ -224,6 +226,10 @@ db.exec(`
 const accountColumns = db.prepare('PRAGMA table_info(accounts)').all();
 if (!accountColumns.some((c) => c.name === 'merged_into')) {
   db.exec('ALTER TABLE accounts ADD COLUMN merged_into INTEGER REFERENCES accounts(id)');
+}
+// 老库的 accounts 没有 created_at（种子脚本建账户时会写这一列），补上；老行留 NULL
+if (!accountColumns.some((c) => c.name === 'created_at')) {
+  db.exec('ALTER TABLE accounts ADD COLUMN created_at TEXT');
 }
 
 // 账本上线：transactions 需要 book_id / member_name / category_label，
